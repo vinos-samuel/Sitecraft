@@ -1,0 +1,34 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Lead {
+  id                  String   @id @default(cuid())
+  name                String
+  rating              String
+  reviewsCount        String
+  phone               String
+  website             String
+  address             String
+  painPoints          String   // JSON string
+  websiteQualityScore Int
+  lat                 Float
+  lng                 Float
+  outreachEmail       String?
+  landingPageHtml     String?
+  liveWebsiteUrl      String?  // Newly added for Phase 2
+  status              String   @default("NEW")
+  createdAt           DateTime @default(now())
+}
+
+model Territory {
+  id        String   @id @default(cuid())
+  name      String
+  geoJson   String   // JSON string representing polygon boundaries
+  createdAt DateTime @default(now())
+}
