@@ -1,6 +1,6 @@
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 generator client {
@@ -8,22 +8,31 @@ generator client {
 }
 
 model Lead {
-  id                  String   @id @default(cuid())
+  id                  String    @id @default(cuid())
   name                String
   rating              String
   reviewsCount        String
   phone               String
   website             String
   address             String
-  painPoints          String   // JSON string
+  painPoints          String    // JSON string
   websiteQualityScore Int
   lat                 Float
   lng                 Float
+  offer               String?   // the offer used when this lead was scanned
   outreachEmail       String?
   landingPageHtml     String?
-  liveWebsiteUrl      String?  // Newly added for Phase 2
-  status              String   @default("NEW")
-  createdAt           DateTime @default(now())
+  liveWebsiteUrl      String?
+
+  // CRM fields
+  contactEmail        String?   // prospect's actual email address
+  notes               String?   // free-text notes per lead
+  lastContactedAt     DateTime?
+  followUpAt          DateTime? // snooze / scheduled next action
+
+  // Status: NEW | CONTACTED | FOLLOW_UP | REPLIED | CLOSED | LOST
+  status              String    @default("NEW")
+  createdAt           DateTime  @default(now())
 }
 
 model Territory {

@@ -1,59 +1,64 @@
-import { NextResponse } from 'next/server';
-import { liveScrapeGoogleMaps, analyzeWebsiteAndReviews, generateOutreachAssets } from '@/lib/scraper';
+import { liveScrapeGoogleMaps, analyzeWebsiteAndReviews } from '@/lib/scraper';
 import { prisma } from '@/lib/prisma';
+
+// Scanning 10 leads + AI analysis takes a while; allow up to 5 minutes on Vercel.
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   const body = await request.json();
   const { businessType, city, offer } = body;
 
   const enc = new TextEncoder();
-  
+
   const stream = new ReadableStream({
     async start(controller) {
       const sendEvent = (msg: string, data?: any) => {
         const payload = JSON.stringify({ message: msg, data });
         controller.enqueue(enc.encode(`data: ${payload}\n\n`));
       };
-      
+
       try {
         sendEvent("Initializing scraping engine...");
-        
+
         // 1. Scrape Google Maps
         const leads = await liveScrapeGoogleMaps(businessType, city, sendEvent);
-        
-        // 2. Perform deep analysis and generation on each found lead
+
+        // 2. Analyse each lead (website score + pain points).
+        // Outreach email + landing page are generated later, on demand per lead,
+        // so the scan stays fast and OpenAI spend only goes to leads worth pitching.
         const enrichedLeads = [];
         for (const lead of leads) {
           const analyzed = await analyzeWebsiteAndReviews(lead, sendEvent);
-          const finalLead = await generateOutreachAssets(analyzed, offer, sendEvent);
-          
+
           try {
-            await prisma.lead.create({
+            const saved = await prisma.lead.create({
               data: {
-                name: finalLead.name,
-                rating: finalLead.rating,
-                reviewsCount: finalLead.reviewsCount,
-                phone: finalLead.phone || "N/A",
-                website: finalLead.website,
-                address: finalLead.address,
-                painPoints: JSON.stringify(finalLead.painPoints),
-                websiteQualityScore: finalLead.websiteQualityScore,
-                lat: finalLead.lat,
-                lng: finalLead.lng,
-                outreachEmail: finalLead.outreachEmail,
-                landingPageHtml: finalLead.landingPageHtml,
+                name: analyzed.name,
+                rating: analyzed.rating,
+                reviewsCount: analyzed.reviewsCount,
+                phone: analyzed.phone || "N/A",
+                website: analyzed.website,
+                address: analyzed.address,
+                painPoints: JSON.stringify(analyzed.painPoints),
+                websiteQualityScore: analyzed.websiteQualityScore,
+                lat: analyzed.lat,
+                lng: analyzed.lng,
+                offer: offer || null,
+                contactEmail: analyzed.emails?.[0] || null,
               }
             });
+            // Use the DB id so the UI can generate/deploy/send for this lead immediately
+            analyzed.id = saved.id;
           } catch(e) {
-             console.error("DB Save err", e); 
+             console.error("DB Save err", e);
           }
 
-          enrichedLeads.push(finalLead);
-          
+          enrichedLeads.push(analyzed);
+
           // Send incremental update to show leads on map as they process
-          sendEvent("incremental_lead", [finalLead]);
+          sendEvent("incremental_lead", enrichedLeads);
         }
-        
+
         sendEvent("DONE", enrichedLeads);
         controller.close();
       } catch (err: any) {
