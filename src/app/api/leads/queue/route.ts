@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+// Always hit the DB fresh — this route must never serve a stale/cached result.
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/leads/queue
  *

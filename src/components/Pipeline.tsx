@@ -41,7 +41,7 @@ export default function Pipeline({ leads, onStatusChange, onLeadSelect }: Pipeli
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
 
-  const byStatus = (status: string) => leads.filter((l) => l.status === status);
+  const byStatus = (status: string) => (Array.isArray(leads) ? leads : []).filter((l) => l.status === status);
 
   const handleDragStart = (e: React.DragEvent, id: string) => {
     setDragId(id);

@@ -32,6 +32,8 @@ export default function Home() {
   const [queueMeta, setQueueMeta] = useState<any>(null);
   const [editingNote, setEditingNote] = useState('');
   const [savingNote, setSavingNote] = useState(false);
+  const [leadsError, setLeadsError] = useState('');
+  const [queueError, setQueueError] = useState('');
 
   // ── Data Fetching ──────────────────────────────────────────────────────────
 
@@ -39,17 +41,31 @@ export default function Home() {
     try {
       const res = await fetch('/api/leads');
       const data = await res.json();
-      setDbLeads(data);
-    } catch (e) {}
+      if (Array.isArray(data)) {
+        setDbLeads(data);
+        setLeadsError('');
+      } else {
+        setLeadsError(data?.error || 'Failed to load leads from the database.');
+      }
+    } catch (e) {
+      setLeadsError('Failed to load leads from the database.');
+    }
   };
 
   const fetchQueue = async () => {
     try {
       const res = await fetch('/api/leads/queue');
       const data = await res.json();
-      setQueueLeads(data.queue ?? []);
-      setQueueMeta(data.meta ?? null);
-    } catch (e) {}
+      if (Array.isArray(data?.queue)) {
+        setQueueLeads(data.queue);
+        setQueueMeta(data.meta ?? null);
+        setQueueError('');
+      } else {
+        setQueueError(data?.error || 'Failed to load the queue from the database.');
+      }
+    } catch (e) {
+      setQueueError('Failed to load the queue from the database.');
+    }
   };
 
   useEffect(() => {
@@ -419,13 +435,22 @@ export default function Home() {
             <h2 style={{ fontSize: '1.4rem', marginBottom: '1rem', color: '#fff' }}>
               Pipeline — {dbLeads.length} Leads
             </h2>
-            <div style={{ flexGrow: 1, overflow: 'hidden' }}>
-              <Pipeline
-                leads={dbLeads}
-                onStatusChange={updateLeadStatus}
-                onLeadSelect={selectLead}
-              />
-            </div>
+            {leadsError ? (
+              <div style={{ padding: '1rem', background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444', borderRadius: '8px', color: '#f87171', fontSize: '0.85rem' }}>
+                ⚠️ Couldn't load leads: {leadsError}
+                <button className="btn btn-secondary" style={{ marginLeft: '1rem', fontSize: '0.75rem', padding: '0.3rem 0.7rem' }} onClick={fetchLeads}>
+                  Retry
+                </button>
+              </div>
+            ) : (
+              <div style={{ flexGrow: 1, overflow: 'hidden' }}>
+                <Pipeline
+                  leads={dbLeads}
+                  onStatusChange={updateLeadStatus}
+                  onLeadSelect={selectLead}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -446,7 +471,14 @@ export default function Home() {
               </button>
             </div>
 
-            {queueLeads.length === 0 ? (
+            {queueError ? (
+              <div style={{ padding: '1rem', background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444', borderRadius: '8px', color: '#f87171', fontSize: '0.85rem' }}>
+                ⚠️ Couldn't load the queue: {queueError}
+                <button className="btn btn-secondary" style={{ marginLeft: '1rem', fontSize: '0.75rem', padding: '0.3rem 0.7rem' }} onClick={fetchQueue}>
+                  Retry
+                </button>
+              </div>
+            ) : queueLeads.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '4rem', color: 'rgba(255,255,255,0.3)', fontStyle: 'italic' }}>
                 <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🎉</div>
                 <div>Queue is clear! Run an OmniScan to find new leads.</div>
