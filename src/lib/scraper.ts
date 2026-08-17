@@ -8,6 +8,7 @@ const openai = new OpenAI({
 
 export interface ScrapedLead {
   id: string;
+  placeId?: string;               // Google Place ID — used to dedupe across scans
   name: string;
   rating: string;
   reviewsCount: string;
@@ -128,6 +129,7 @@ export async function liveScrapeGoogleMaps(
 
     return {
       id: place.id ?? `places_${i}`,
+      placeId: place.id ?? undefined,
       name: place.displayName?.text ?? 'Unknown Business',
       rating: String(place.rating ?? 'N/A'),
       reviewsCount: String(place.userRatingCount ?? 0),
@@ -194,7 +196,7 @@ ${reviewContext}
 
 Respond ONLY with JSON matching this exact shape:
 {
-  "painPoints": [<2-3 specific business/customer-service pain points inferred from the reviews, as actionable strings — about how the business runs, NOT about the website>],
+  "painPoints": [<2-3 specific operational friction points inferred from the reviews (e.g. booking difficulty, response speed, appointment reminders) — phrase each as a respectful observation and business opportunity, NEVER as a criticism of staff, service quality, or an insult. This will be read by a stranger receiving cold outreach. NOT about the website.>],
   "inferredEmail": <best-guess contact email based on website domain, or "" if no website>
 }`,
         },
@@ -314,12 +316,13 @@ export async function assessWebsiteQuality(
 
     onProgress(`[PageSpeed] ${lead.name}: Mobile ${mobilePct}/100, Desktop ${desktopPct}/100 → Score ${lead.websiteQualityScore}/5`);
   } catch (err: any) {
-    // A site PageSpeed can't even reach is often itself a red flag (down, broken, blocking bots).
+    // Test failure isn't proof the site is broken (could be a timeout, or PageSpeed
+    // being blocked) — don't let this get cited to a prospect as a verified fact.
     onProgress(`[PageSpeed] Could not test ${lead.name}'s website (${err.message}).`);
     lead.mobileScore = 0;
     lead.desktopScore = 0;
     lead.websiteQualityScore = 2;
-    lead.websiteIssues = ["Automated website test couldn't load the site — this itself may signal a broken or misconfigured website."];
+    lead.websiteIssues = ['Automated website test could not complete for this site — not a confirmed issue, just unverified.'];
   }
 
   return lead;
@@ -341,17 +344,33 @@ export async function generateOutreachAssets(
   }
 
   try {
+    // Real PageSpeed data always yields a >0 score on at least one strategy when a
+    // website exists. Both scores at 0 with a website present means the test failed
+    // (timeout/blocked), not that the site is confirmed broken — don't let the model
+    // assert that as fact to a real business owner.
+    const hasVerifiedPsiData = lead.website && (lead.mobileScore > 0 || lead.desktopScore > 0);
     const websiteIssuesContext = lead.websiteIssues?.length > 0
-      ? `Verified website problems (from Google's own PageSpeed test — cite these specifically, they are credible and checkable, not a guess):
+      ? hasVerifiedPsiData
+        ? `Verified website problems (from Google's own PageSpeed test — cite these specifically, they are credible and checkable, not a guess):
 - Mobile performance score: ${lead.mobileScore}/100, Desktop: ${lead.desktopScore}/100
 ${lead.websiteIssues.map((i) => `- ${i}`).join('\n')}`
+        : lead.website
+          ? `Note: their website could not be automatically tested. Do NOT claim their site is broken, slow, or bad — that is unverified. Lead with the business pain points instead, and only mention the website in passing if at all.`
+          : `This business has no website at all — true and safe to mention directly.`
       : '';
 
-    const prompt = `You are an expert sales engineer.
+    const calendarLink = process.env.CALENDAR_LINK;
+    const calendarContext = calendarLink
+      ? `Booking link: ${calendarLink} — end the email with a low-friction call to action to book a quick call using this link.`
+      : `No booking link available — end with a simple "reply to this email" call to action instead.`;
+
+    const prompt = `You are an expert sales engineer writing cold outreach to a stranger. Be respectful and helpful in tone — never insult the business, its staff, or its service quality, even indirectly. Only state things as fact that are explicitly marked verified below; otherwise speak in terms of opportunity, not accusation.
+
 Lead: ${lead.name} (${lead.website})
 Business Pain Points (from customer reviews): ${lead.painPoints.join(', ')}
 ${websiteIssuesContext}
 My Offer: ${offer}
+${calendarContext}
 
 Generate a JSON response with exactly two keys:
 "outreachEmail": A highly converting 3-paragraph cold email referencing their specific pain points and offering my service. Start with "Subject: " on the first line.

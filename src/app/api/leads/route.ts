@@ -25,6 +25,13 @@ export async function PUT(request: Request) {
       notes,
       lastContactedAt,
       followUpAt,
+      dealValue,
+      closedAt,
+      contractUrl,
+      contractSentAt,
+      invoiceUrl,
+      depositPaidAt,
+      outreachEmail,
     } = body;
 
     if (!id) {
@@ -39,8 +46,35 @@ export async function PUT(request: Request) {
       data.lastContactedAt = lastContactedAt ? new Date(lastContactedAt) : null;
     if (followUpAt !== undefined)
       data.followUpAt = followUpAt ? new Date(followUpAt) : null;
+    if (dealValue !== undefined) data.dealValue = dealValue === null ? null : Number(dealValue);
+    if (closedAt !== undefined) data.closedAt = closedAt ? new Date(closedAt) : null;
+    if (contractUrl !== undefined) data.contractUrl = contractUrl;
+    if (contractSentAt !== undefined)
+      data.contractSentAt = contractSentAt ? new Date(contractSentAt) : null;
+    if (invoiceUrl !== undefined) data.invoiceUrl = invoiceUrl;
+    if (depositPaidAt !== undefined)
+      data.depositPaidAt = depositPaidAt ? new Date(depositPaidAt) : null;
+    if (outreachEmail !== undefined) data.outreachEmail = outreachEmail;
 
     const lead = await prisma.lead.update({ where: { id }, data });
+
+    // Log status changes (especially CLOSED, where revenue becomes visible) for the Overview tab.
+    if (status !== undefined) {
+      try {
+        await prisma.activity.create({
+          data: {
+            type: status === 'CLOSED' ? 'DEAL_CLOSED' : 'STATUS_CHANGE',
+            leadId: id,
+            message: status === 'CLOSED'
+              ? `${lead.name} marked CLOSED${dealValue ? ` — $${dealValue}` : ''}.`
+              : `${lead.name} moved to ${status}.`,
+          },
+        });
+      } catch (e) {
+        console.error('Activity log err', e);
+      }
+    }
+
     return NextResponse.json(lead);
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

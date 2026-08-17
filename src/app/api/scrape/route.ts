@@ -35,27 +35,40 @@ export async function POST(request: Request) {
           ]);
 
           try {
-            const saved = await prisma.lead.create({
-              data: {
-                name: lead.name,
-                rating: lead.rating,
-                reviewsCount: lead.reviewsCount,
-                phone: lead.phone || "N/A",
-                website: lead.website,
-                address: lead.address,
-                painPoints: JSON.stringify(lead.painPoints),
-                websiteQualityScore: lead.websiteQualityScore,
-                mobileScore: lead.mobileScore,
-                desktopScore: lead.desktopScore,
-                websiteIssues: JSON.stringify(lead.websiteIssues),
-                lat: lead.lat,
-                lng: lead.lng,
-                offer: offer || null,
-                contactEmail: lead.emails?.[0] || null,
-              }
-            });
-            // Use the DB id so the UI can generate/deploy/send for this lead immediately
-            lead.id = saved.id;
+            // Dedupe by Google Place ID — re-scanning the same city/niche must not
+            // create fresh duplicates of businesses already in the pipeline, and
+            // must never overwrite an existing lead's CRM status/notes.
+            const existing = lead.placeId
+              ? await prisma.lead.findUnique({ where: { placeId: lead.placeId }, select: { id: true } })
+              : null;
+
+            if (existing) {
+              lead.id = existing.id;
+              sendEvent(`[Dedupe] ${lead.name} is already in your pipeline — skipped.`);
+            } else {
+              const saved = await prisma.lead.create({
+                data: {
+                  placeId: lead.placeId || null,
+                  name: lead.name,
+                  rating: lead.rating,
+                  reviewsCount: lead.reviewsCount,
+                  phone: lead.phone || "N/A",
+                  website: lead.website,
+                  address: lead.address,
+                  painPoints: JSON.stringify(lead.painPoints),
+                  websiteQualityScore: lead.websiteQualityScore,
+                  mobileScore: lead.mobileScore,
+                  desktopScore: lead.desktopScore,
+                  websiteIssues: JSON.stringify(lead.websiteIssues),
+                  lat: lead.lat,
+                  lng: lead.lng,
+                  offer: offer || null,
+                  contactEmail: lead.emails?.[0] || null,
+                }
+              });
+              // Use the DB id so the UI can generate/deploy/send for this lead immediately
+              lead.id = saved.id;
+            }
           } catch(e) {
              console.error("DB Save err", e);
           }
@@ -64,6 +77,18 @@ export async function POST(request: Request) {
 
           // Send incremental update to show leads on map as they process
           sendEvent("incremental_lead", enrichedLeads);
+        }
+
+        // Record the scan itself for the Overview tab / remote supervision.
+        try {
+          await prisma.activity.create({
+            data: {
+              type: 'SCAN',
+              message: `Scanned "${businessType} in ${city}" — ${enrichedLeads.length} businesses found.`,
+            },
+          });
+        } catch (e) {
+          console.error('Activity log err', e);
         }
 
         sendEvent("DONE", enrichedLeads);

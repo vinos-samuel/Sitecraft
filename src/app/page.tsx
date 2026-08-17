@@ -10,7 +10,7 @@ const DynamicLiveMap = dynamic(() => import('@/components/LiveMap'), {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type View = 'map' | 'pipeline' | 'queue';
+type View = 'map' | 'pipeline' | 'queue' | 'overview';
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -34,6 +34,10 @@ export default function Home() {
   const [savingNote, setSavingNote] = useState(false);
   const [leadsError, setLeadsError] = useState('');
   const [queueError, setQueueError] = useState('');
+  const [editingEmail, setEditingEmail] = useState('');
+  const [editingDealValue, setEditingDealValue] = useState('');
+  const [overview, setOverview] = useState<any>(null);
+  const [overviewError, setOverviewError] = useState('');
 
   // ── Data Fetching ──────────────────────────────────────────────────────────
 
@@ -68,6 +72,21 @@ export default function Home() {
     }
   };
 
+  const fetchOverview = async () => {
+    try {
+      const res = await fetch('/api/overview');
+      const data = await res.json();
+      if (data && !data.error) {
+        setOverview(data);
+        setOverviewError('');
+      } else {
+        setOverviewError(data?.error || 'Failed to load overview.');
+      }
+    } catch (e) {
+      setOverviewError('Failed to load overview.');
+    }
+  };
+
   useEffect(() => {
     setMounted(true);
     fetchLeads();
@@ -86,6 +105,8 @@ export default function Home() {
     }
     setSelectedLead({ ...lead, painPoints });
     setEditingNote(lead.notes ?? '');
+    setEditingEmail(lead.outreachEmail ?? '');
+    setEditingDealValue(lead.dealValue != null ? String(lead.dealValue) : '');
   };
 
   const updateLeadStatus = async (id: string, status: string) => {
@@ -117,6 +138,19 @@ export default function Home() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id, status: 'CONTACTED', lastContactedAt: new Date().toISOString() }),
     });
+    await fetchLeads();
+    await fetchQueue();
+  };
+
+  const markClosed = async (id: string) => {
+    const dealValue = editingDealValue ? Number(editingDealValue) : null;
+    const closedAt = new Date().toISOString();
+    await fetch('/api/leads', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status: 'CLOSED', dealValue, closedAt }),
+    });
+    setSelectedLead((prev: any) => (prev ? { ...prev, status: 'CLOSED', dealValue, closedAt } : prev));
     await fetchLeads();
     await fetchQueue();
   };
@@ -207,7 +241,7 @@ export default function Home() {
       });
       const data = await res.json();
       if (data.success && data.lead) {
-        selectLead(data.lead);
+        selectLead(data.lead); // also re-seeds editingEmail from the freshly generated text
         fetchLeads();
       } else {
         alert('Generation failed: ' + (data.error ?? 'unknown error'));
@@ -256,13 +290,24 @@ export default function Home() {
     }
     setSendingEmail(true);
 
+    // Uses the edited text in the drawer, not the raw AI output — this is the
+    // approval gate: whatever's on screen when you hit Send is what goes out.
     let subject = `Optimizing ${selectedLead.name}`;
-    let body = selectedLead.outreachEmail || "Hi, we can fix your pain points.";
+    let body = editingEmail || selectedLead.outreachEmail || "Hi, we can fix your pain points.";
 
     if (body.startsWith('Subject: ')) {
       const parts = body.split('\n\n');
       subject = parts[0].replace('Subject: ', '');
       body = parts.slice(1).join('\n\n');
+    }
+
+    // Persist any edits made before sending, so the record matches what was actually sent.
+    if (editingEmail && editingEmail !== selectedLead.outreachEmail) {
+      await fetch('/api/leads', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: selectedLead.id, outreachEmail: editingEmail }),
+      });
     }
 
     if (selectedLead.liveWebsiteUrl) {
@@ -397,6 +442,7 @@ export default function Home() {
             { id: 'map', label: '🗺 Live OmniRadar' },
             { id: 'pipeline', label: '🧲 Pipeline' },
             { id: 'queue', label: `📋 Today's Queue${queueMeta ? ` (${queueMeta.total})` : ''}` },
+            { id: 'overview', label: '📊 Overview' },
           ] as { id: View; label: string }[]).map(tab => (
             <button
               key={tab.id}
@@ -406,6 +452,7 @@ export default function Home() {
                 setView(tab.id);
                 if (tab.id === 'pipeline' || tab.id === 'queue') fetchLeads();
                 if (tab.id === 'queue') fetchQueue();
+                if (tab.id === 'overview') fetchOverview();
               }}
             >
               {tab.label}
@@ -499,11 +546,71 @@ export default function Home() {
             )}
           </div>
         )}
+
+        {/* ── Overview View (remote supervision) ──────────────────────────────── */}
+        {view === 'overview' && (
+          <div style={{ padding: '5rem 2rem 2rem', overflowY: 'auto', height: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h2 style={{ fontSize: '1.4rem', color: '#fff' }}>📊 Overview</h2>
+              <button className="btn btn-secondary" style={{ fontSize: '0.8rem' }} onClick={fetchOverview}>
+                🔄 Refresh
+              </button>
+            </div>
+
+            {overviewError ? (
+              <div style={{ padding: '1rem', background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444', borderRadius: '8px', color: '#f87171', fontSize: '0.85rem' }}>
+                ⚠️ Couldn't load overview: {overviewError}
+                <button className="btn btn-secondary" style={{ marginLeft: '1rem', fontSize: '0.75rem', padding: '0.3rem 0.7rem' }} onClick={fetchOverview}>
+                  Retry
+                </button>
+              </div>
+            ) : !overview ? (
+              <div style={{ color: 'rgba(255,255,255,0.4)' }}>Loading...</div>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
+                  <StatTile label="Total Leads" value={overview.totalLeads} />
+                  <StatTile label="Contacted or Beyond" value={overview.contactedOrBeyond} />
+                  <StatTile label="Reply Rate" value={overview.replyRate != null ? `${(overview.replyRate * 100).toFixed(0)}%` : '—'} />
+                  <StatTile label="Close Rate" value={overview.closeRate != null ? `${(overview.closeRate * 100).toFixed(0)}%` : '—'} />
+                  <StatTile label="Closed Revenue" value={`$${overview.totalClosedRevenue.toLocaleString()}`} accent="#10b981" />
+                  <StatTile label="Emails Sent (7d)" value={overview.emailsSentThisWeek} />
+                  <StatTile label="Emails Sent (Total)" value={overview.emailsSentTotal} />
+                  <StatTile label="Scans (7d)" value={overview.scansThisWeek} />
+                  <StatTile label="Demos Deployed" value={overview.demosDeployedTotal} />
+                </div>
+
+                <h3 style={{ fontSize: '1rem', marginBottom: '10px', color: '#fff' }}>Pipeline by Status</h3>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '2rem' }}>
+                  {Object.entries(overview.byStatus || {}).map(([status, count]) => (
+                    <span key={status} style={{ background: 'rgba(255,255,255,0.06)', padding: '6px 14px', borderRadius: '20px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      {status}: <strong style={{ color: '#fff' }}>{count as number}</strong>
+                    </span>
+                  ))}
+                </div>
+
+                <h3 style={{ fontSize: '1rem', marginBottom: '10px', color: '#fff' }}>Recent Activity</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {(overview.recentActivity || []).length === 0 ? (
+                    <div style={{ color: 'rgba(255,255,255,0.3)', fontStyle: 'italic' }}>No activity yet.</div>
+                  ) : (
+                    overview.recentActivity.map((a: any) => (
+                      <div key={a.id} style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <span style={{ color: 'var(--accent)', marginRight: '8px' }}>{new Date(a.createdAt).toLocaleString()}</span>
+                        {a.message}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Lead Detail Drawer ────────────────────────────────────────────────── */}
       {selectedLead && (
-        <div style={{
+        <div key={selectedLead.id} style={{
           position: 'fixed', top: 0, right: 0, width: '500px', height: '100vh',
           background: 'rgba(10, 10, 26, 0.95)', backdropFilter: 'blur(10px)',
           borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
@@ -576,13 +683,22 @@ export default function Home() {
             </ul>
           </div>
 
-          {/* Outreach Email */}
+          {/* Outreach Email — editable: nothing sends until you've read and can fix this */}
           <div style={{ marginBottom: '1.5rem' }}>
-            <h3 style={{ fontSize: '1rem', marginBottom: '10px' }}>Generated Outreach Email</h3>
+            <h3 style={{ fontSize: '1rem', marginBottom: '4px' }}>Outreach Email</h3>
             {selectedLead.outreachEmail ? (
-              <div style={{ background: 'rgba(255,255,255,0.05)', padding: '15px', borderRadius: '8px', fontSize: '0.85rem', whiteSpace: 'pre-wrap', color: 'var(--text-secondary)' }}>
-                {selectedLead.outreachEmail}
-              </div>
+              <>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                  Read this before sending — edit anything that's wrong.
+                </p>
+                <textarea
+                  className="input-field"
+                  rows={11}
+                  value={editingEmail}
+                  onChange={(e) => setEditingEmail(e.target.value)}
+                  style={{ padding: '0.75rem', width: '100%', fontSize: '0.85rem', fontFamily: 'inherit', whiteSpace: 'pre-wrap' }}
+                />
+              </>
             ) : (
               <button
                 className="btn btn-primary"
@@ -620,15 +736,86 @@ export default function Home() {
           {/* Send */}
           <button
             className="btn btn-primary"
-            style={{ width: '100%', fontSize: '1.1rem' }}
+            style={{ width: '100%', fontSize: '1.1rem', marginBottom: '1.5rem' }}
             onClick={sendEmail}
             disabled={sendingEmail}
           >
             {sendingEmail ? "Sending..." : "🚀 Send Outreach & Prototype Link"}
           </button>
+
+          {/* Deal & Documents */}
+          <div style={{ background: 'rgba(0,0,0,0.3)', padding: '15px', borderRadius: '8px' }}>
+            <h3 style={{ fontSize: '1rem', color: 'var(--accent)', marginBottom: '10px' }}>💰 Deal & Documents</h3>
+
+            <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Deal Value (USD)</label>
+            <input
+              type="number"
+              className="input-field"
+              placeholder="1000"
+              value={editingDealValue}
+              onChange={(e) => setEditingDealValue(e.target.value)}
+              onBlur={async () => {
+                const val = editingDealValue ? Number(editingDealValue) : null;
+                await fetch('/api/leads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: selectedLead.id, dealValue: val }) });
+              }}
+              style={{ padding: '0.6rem', width: '100%', marginBottom: '12px' }}
+            />
+
+            <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Contract Link</label>
+            <input
+              type="text"
+              className="input-field"
+              placeholder="Paste contract/proposal link..."
+              defaultValue={selectedLead.contractUrl ?? ''}
+              onBlur={async (e) => {
+                await fetch('/api/leads', {
+                  method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ id: selectedLead.id, contractUrl: e.target.value, contractSentAt: e.target.value ? new Date().toISOString() : null }),
+                });
+              }}
+              style={{ padding: '0.6rem', width: '100%', marginBottom: '12px' }}
+            />
+
+            <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Invoice / Payment Link</label>
+            <input
+              type="text"
+              className="input-field"
+              placeholder="Paste Stripe/invoice link..."
+              defaultValue={selectedLead.invoiceUrl ?? ''}
+              onBlur={async (e) => {
+                await fetch('/api/leads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: selectedLead.id, invoiceUrl: e.target.value }) });
+              }}
+              style={{ padding: '0.6rem', width: '100%' }}
+            />
+
+            {selectedLead.status !== 'CLOSED' ? (
+              <button
+                className="btn btn-primary"
+                style={{ marginTop: '14px', width: '100%', background: 'rgba(16,185,129,0.25)', border: '1px solid #10b981' }}
+                onClick={() => markClosed(selectedLead.id)}
+              >
+                ✅ Mark Closed & Won
+              </button>
+            ) : (
+              <div style={{ marginTop: '14px', color: '#34d399', fontSize: '0.85rem', fontWeight: 600 }}>
+                ✅ Closed{selectedLead.dealValue ? ` — $${selectedLead.dealValue.toLocaleString()}` : ''}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </main>
+  );
+}
+
+// ─── Stat Tile Component ──────────────────────────────────────────────────────
+
+function StatTile({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
+  return (
+    <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '1rem' }}>
+      <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>{label}</div>
+      <div style={{ fontSize: '1.5rem', fontWeight: 700, color: accent ?? '#fff' }}>{value}</div>
+    </div>
   );
 }
 

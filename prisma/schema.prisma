@@ -9,6 +9,7 @@ generator client {
 
 model Lead {
   id                  String    @id @default(cuid())
+  placeId             String?   @unique // Google Place ID — prevents duplicate leads on re-scan
   name                String
   rating              String
   reviewsCount        String
@@ -33,6 +34,14 @@ model Lead {
   lastContactedAt     DateTime?
   followUpAt          DateTime? // snooze / scheduled next action
 
+  // Deal tracking — makes revenue visible inside the tool, not just kanban columns
+  dealValue           Int?      // agreed deal value in whole dollars, set when closing
+  closedAt            DateTime?
+  contractUrl         String?   // link to the contract document (pasted, not generated)
+  contractSentAt      DateTime?
+  invoiceUrl          String?   // link to the payment/invoice page (pasted, not generated)
+  depositPaidAt       DateTime?
+
   // Status: NEW | CONTACTED | FOLLOW_UP | REPLIED | CLOSED | LOST
   status              String    @default("NEW")
   createdAt           DateTime  @default(now())
@@ -42,5 +51,16 @@ model Territory {
   id        String   @id @default(cuid())
   name      String
   geoJson   String   // JSON string representing polygon boundaries
+  createdAt DateTime @default(now())
+}
+
+// Real audit trail: what happened, when, on which lead. Powers the Overview
+// tab and (later) a daily digest — replaces the client-only Activity Console,
+// which loses everything on refresh.
+model Activity {
+  id        String   @id @default(cuid())
+  type      String   // SCAN | EMAIL_SENT | DEMO_DEPLOYED | STATUS_CHANGE | DEAL_CLOSED
+  leadId    String?
+  message   String
   createdAt DateTime @default(now())
 }

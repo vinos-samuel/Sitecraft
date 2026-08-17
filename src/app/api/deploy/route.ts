@@ -60,6 +60,14 @@ export async function POST(request: Request) {
       data: { liveWebsiteUrl: siteUrl },
     });
 
+    try {
+      await prisma.activity.create({
+        data: { type: 'DEMO_DEPLOYED', leadId, message: `Demo site deployed for ${lead.name}: ${siteUrl}` },
+      });
+    } catch (e) {
+      console.error('Activity log err', e);
+    }
+
     return NextResponse.json({ success: true, url: siteUrl, deploymentUrl: `https://${deployData.url}`, lead: updatedLead });
 
   } catch (error: any) {
