@@ -16,8 +16,11 @@ export interface ScrapedLead {
   address: string;
   emails: string[];
   socials: string[];
-  painPoints: string[];
-  websiteQualityScore: number;
+  painPoints: string[];          // business/customer-service issues, from review text
+  websiteQualityScore: number;   // 1-5 triage score, derived from real PageSpeed results
+  mobileScore: number;           // 0-100, PageSpeed performance score (mobile)
+  desktopScore: number;          // 0-100, PageSpeed performance score (desktop)
+  websiteIssues: string[];       // concrete, verified reasons for the score
   lat: number;
   lng: number;
   outreachEmail?: string;
@@ -136,6 +139,9 @@ export async function liveScrapeGoogleMaps(
       // Store raw review text temporarily in painPoints; will be replaced by AI
       painPoints: reviewTexts.length > 0 ? reviewTexts : [],
       websiteQualityScore: 0,
+      mobileScore: 0,
+      desktopScore: 0,
+      websiteIssues: [],
       lat: loc.latitude ?? cityLat + (Math.random() - 0.5) * 0.05,
       lng: loc.longitude ?? cityLng + (Math.random() - 0.5) * 0.05,
     };
@@ -144,29 +150,28 @@ export async function liveScrapeGoogleMaps(
   return leads;
 }
 
-// ─── AI Analysis ─────────────────────────────────────────────────────────────
+// ─── AI Analysis (customer reviews only) ───────────────────────────────────────
 
 /**
- * Uses OpenAI to analyse the business's review text and website quality.
- * If no API key, falls back to a fast heuristic score.
+ * Uses OpenAI to read the business's customer reviews for operational pain
+ * points (e.g. "patients complain about hold times") — separate from website
+ * quality, which is assessed for real in assessWebsiteQuality() below.
+ * If no API key, falls back to using the raw review snippets as-is.
  */
 export async function analyzeWebsiteAndReviews(
   lead: ScrapedLead,
   onProgress: (msg: string, leadUpdate?: any) => void
 ): Promise<ScrapedLead> {
-  onProgress(`[AI Agent] Analysing ${lead.name}...`);
+  onProgress(`[AI Agent] Reading customer reviews for ${lead.name}...`);
 
   if (!process.env.OPENAI_API_KEY) {
-    // Heuristic fallback: rate based on rating number
-    const ratingNum = parseFloat(lead.rating) || 3;
-    lead.websiteQualityScore = ratingNum < 3.5 ? 1 : ratingNum < 4.2 ? 2 : 3;
     lead.painPoints = lead.painPoints.length > 0
       ? lead.painPoints.slice(0, 2)           // use raw review snippets as placeholders
       : ['No review data available.'];
     if (lead.website) {
       lead.emails = [`contact@${lead.website.replace(/https?:\/\//, '').split('/')[0]}`];
     }
-    onProgress(`[AI Agent] Heuristic analysis done for ${lead.name}. Score: ${lead.websiteQualityScore}/5`);
+    onProgress(`[AI Agent] Heuristic review pass done for ${lead.name}.`);
     return lead;
   }
 
@@ -180,7 +185,7 @@ export async function analyzeWebsiteAndReviews(
       messages: [
         {
           role: 'user',
-          content: `You are a sales analyst. Analyse this business and respond in JSON.
+          content: `You are a sales analyst. Read this business's customer reviews and respond in JSON.
 
 Business: ${lead.name}
 Website: ${lead.website || 'none'}
@@ -189,28 +194,132 @@ ${reviewContext}
 
 Respond ONLY with JSON matching this exact shape:
 {
-  "websiteQualityScore": <integer 1-5, where 1=very poor website/no online presence, 5=excellent>,
-  "painPoints": [<2-3 specific pain points inferred from reviews or low rating, as actionable strings>],
+  "painPoints": [<2-3 specific business/customer-service pain points inferred from the reviews, as actionable strings — about how the business runs, NOT about the website>],
   "inferredEmail": <best-guess contact email based on website domain, or "" if no website>
 }`,
         },
       ],
       response_format: { type: 'json_object' },
-      max_tokens: 300,
+      max_tokens: 250,
     });
 
     const res = JSON.parse(completion.choices[0].message.content ?? '{}');
-    lead.websiteQualityScore = res.websiteQualityScore ?? 2;
     lead.painPoints = res.painPoints ?? lead.painPoints.slice(0, 2);
     if (res.inferredEmail) lead.emails = [res.inferredEmail];
 
-    onProgress(`[AI Agent] Analysis complete for ${lead.name}. Quality Score: ${lead.websiteQualityScore}/5`);
+    onProgress(`[AI Agent] Review analysis complete for ${lead.name}.`);
   } catch (err: any) {
-    onProgress(`[AI Agent] Analysis error for ${lead.name}: ${err.message}. Using fallback.`);
-    lead.websiteQualityScore = 2;
+    onProgress(`[AI Agent] Review analysis error for ${lead.name}: ${err.message}.`);
     if (lead.painPoints.length === 0) {
       lead.painPoints = ['Could not extract specific pain points.'];
     }
+  }
+
+  return lead;
+}
+
+// ─── Website Quality (Google PageSpeed Insights) ───────────────────────────────
+
+const PSI_CATEGORIES = ['performance', 'accessibility', 'best-practices', 'seo'];
+
+async function runPageSpeed(url: string, strategy: 'mobile' | 'desktop', apiKey?: string) {
+  const params = new URLSearchParams({ url, strategy });
+  PSI_CATEGORIES.forEach((c) => params.append('category', c));
+  if (apiKey) params.set('key', apiKey);
+
+  // PageSpeed can take 10-20s per call; don't let one slow site stall the whole scan.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const res = await fetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${params}`, {
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`PageSpeed API error (${res.status})`);
+    return await res.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function scoreToInt(score: number | null | undefined): number {
+  return score == null ? 0 : Math.round(score * 100);
+}
+
+// Mobile-weighted: most local-business searches happen on a phone.
+function bucketTriageScore(mobilePct: number, desktopPct: number): number {
+  const blended = mobilePct * 0.7 + desktopPct * 0.3;
+  if (blended >= 90) return 5;
+  if (blended >= 75) return 4;
+  if (blended >= 55) return 3;
+  if (blended >= 35) return 2;
+  return 1;
+}
+
+function extractIssues(lighthouseResult: any): { title: string; score: number }[] {
+  const audits = lighthouseResult?.audits ?? {};
+  return Object.values(audits)
+    .filter((a: any) => typeof a.score === 'number' && a.score < 0.9 && a.title)
+    .map((a: any) => ({ title: a.title as string, score: a.score as number }));
+}
+
+/**
+ * Runs Google PageSpeed Insights (Lighthouse) against the lead's real website,
+ * for both mobile and desktop. Produces a verifiable 1-5 triage score plus
+ * concrete, named reasons — not an AI guess based on star ratings.
+ *
+ * Requires: GOOGLE_PLACES_API_KEY also works here (same Google Cloud project)
+ * as long as "PageSpeed Insights API" is enabled on it.
+ */
+export async function assessWebsiteQuality(
+  lead: ScrapedLead,
+  onProgress: (msg: string, leadUpdate?: any) => void
+): Promise<ScrapedLead> {
+  if (!lead.website) {
+    lead.mobileScore = 0;
+    lead.desktopScore = 0;
+    lead.websiteQualityScore = 1;
+    lead.websiteIssues = ['No website found for this business — they are invisible to anyone searching online.'];
+    onProgress(`[PageSpeed] ${lead.name} has no website. Score: 1/5.`);
+    return lead;
+  }
+
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  onProgress(`[PageSpeed] Testing ${lead.name}'s website (mobile + desktop)...`);
+
+  try {
+    const [mobile, desktop] = await Promise.all([
+      runPageSpeed(lead.website, 'mobile', apiKey),
+      runPageSpeed(lead.website, 'desktop', apiKey),
+    ]);
+
+    const mobilePct = scoreToInt(mobile?.lighthouseResult?.categories?.performance?.score);
+    const desktopPct = scoreToInt(desktop?.lighthouseResult?.categories?.performance?.score);
+
+    // Merge issues from both runs, worst-first, deduped, capped at 5 bullets.
+    const combined = [...extractIssues(mobile?.lighthouseResult), ...extractIssues(desktop?.lighthouseResult)]
+      .sort((a, b) => a.score - b.score);
+    const seen = new Set<string>();
+    const issues: string[] = [];
+    for (const item of combined) {
+      if (seen.has(item.title)) continue;
+      seen.add(item.title);
+      issues.push(item.title);
+      if (issues.length >= 5) break;
+    }
+
+    lead.mobileScore = mobilePct;
+    lead.desktopScore = desktopPct;
+    lead.websiteQualityScore = bucketTriageScore(mobilePct, desktopPct);
+    lead.websiteIssues = issues.length > 0 ? issues : ["No major issues detected — the site passed Google's core checks."];
+
+    onProgress(`[PageSpeed] ${lead.name}: Mobile ${mobilePct}/100, Desktop ${desktopPct}/100 → Score ${lead.websiteQualityScore}/5`);
+  } catch (err: any) {
+    // A site PageSpeed can't even reach is often itself a red flag (down, broken, blocking bots).
+    onProgress(`[PageSpeed] Could not test ${lead.name}'s website (${err.message}).`);
+    lead.mobileScore = 0;
+    lead.desktopScore = 0;
+    lead.websiteQualityScore = 2;
+    lead.websiteIssues = ["Automated website test couldn't load the site — this itself may signal a broken or misconfigured website."];
   }
 
   return lead;
@@ -232,9 +341,16 @@ export async function generateOutreachAssets(
   }
 
   try {
+    const websiteIssuesContext = lead.websiteIssues?.length > 0
+      ? `Verified website problems (from Google's own PageSpeed test — cite these specifically, they are credible and checkable, not a guess):
+- Mobile performance score: ${lead.mobileScore}/100, Desktop: ${lead.desktopScore}/100
+${lead.websiteIssues.map((i) => `- ${i}`).join('\n')}`
+      : '';
+
     const prompt = `You are an expert sales engineer.
 Lead: ${lead.name} (${lead.website})
-Pain Points: ${lead.painPoints.join(', ')}
+Business Pain Points (from customer reviews): ${lead.painPoints.join(', ')}
+${websiteIssuesContext}
 My Offer: ${offer}
 
 Generate a JSON response with exactly two keys:
@@ -280,10 +396,13 @@ function buildDemoLeads(
     emails: [],
     socials: [],
     painPoints: [
-      'Clients complain website is hard to navigate on mobile.',
-      'Users mention they cannot find pricing information easily.',
+      'Customers mention long wait times for appointments.',
+      'Reviews note staff are hard to reach by phone.',
     ],
-    websiteQualityScore: Math.floor(Math.random() * 3) + 1,
+    websiteQualityScore: 0,
+    mobileScore: 0,
+    desktopScore: 0,
+    websiteIssues: [],
     lat: cityLat + (Math.random() - 0.5) * 0.05,
     lng: cityLng + (Math.random() - 0.5) * 0.05,
   }));

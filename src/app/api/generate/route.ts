@@ -21,6 +21,13 @@ export async function POST(request: Request) {
       painPoints = [lead.painPoints];
     }
 
+    let websiteIssues: string[] = [];
+    try {
+      websiteIssues = lead.websiteIssues ? JSON.parse(lead.websiteIssues) : [];
+    } catch {
+      websiteIssues = [];
+    }
+
     const scraped: ScrapedLead = {
       id: lead.id,
       name: lead.name,
@@ -33,6 +40,9 @@ export async function POST(request: Request) {
       socials: [],
       painPoints,
       websiteQualityScore: lead.websiteQualityScore,
+      mobileScore: lead.mobileScore ?? 0,
+      desktopScore: lead.desktopScore ?? 0,
+      websiteIssues,
       lat: lead.lat,
       lng: lead.lng,
     };

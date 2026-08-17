@@ -15,8 +15,11 @@ model Lead {
   phone               String
   website             String
   address             String
-  painPoints          String    // JSON string
-  websiteQualityScore Int
+  painPoints          String    // JSON string — business/customer-service issues, from review text
+  websiteQualityScore Int       // 1-5 triage score, derived from mobile+desktop PageSpeed performance
+  mobileScore         Int?      // 0-100, Google PageSpeed performance score (mobile)
+  desktopScore        Int?      // 0-100, Google PageSpeed performance score (desktop)
+  websiteIssues       String?   // JSON string — concrete, verified reasons for the score (Lighthouse audit titles)
   lat                 Float
   lng                 Float
   offer               String?   // the offer used when this lead was scanned
