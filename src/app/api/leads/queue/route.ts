@@ -52,9 +52,15 @@ export async function GET() {
       take: 10,
     });
 
-    // Merge, de-dupe by id, cap at 10
+    // Merge, de-dupe by id, cap at 10 — tag each with why it's here so the
+    // UI can group by reason (Overdue Follow-ups / Gone Quiet / Fresh Leads).
     const seen = new Set<string>();
-    const queue = [...followUpDue, ...staleContacted, ...freshNew]
+    const tagged = [
+      ...followUpDue.map((l) => ({ ...l, queueReason: 'OVERDUE' as const })),
+      ...staleContacted.map((l) => ({ ...l, queueReason: 'STALE' as const })),
+      ...freshNew.map((l) => ({ ...l, queueReason: 'FRESH' as const })),
+    ];
+    const queue = tagged
       .filter((l) => {
         if (seen.has(l.id)) return false;
         seen.add(l.id);

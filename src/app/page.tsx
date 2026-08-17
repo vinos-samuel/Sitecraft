@@ -2,15 +2,34 @@
 import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import Pipeline from '@/components/Pipeline';
+import { IconClock, IconCheck, IconMail, IconExternal, IconRefresh } from '@/components/Icons';
 
 const DynamicLiveMap = dynamic(() => import('@/components/LiveMap'), {
   ssr: false,
-  loading: () => <p style={{ color: 'var(--text-secondary)' }}>Loading Map...</p>
+  loading: () => <p style={{ color: 'var(--color-text-faint)' }}>Loading map...</p>
 });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type View = 'map' | 'pipeline' | 'queue' | 'overview';
+type View = 'today' | 'board' | 'map' | 'numbers';
+
+const QUEUE_GROUPS: Record<string, { title: string; primary: string; stripe: string; urgent?: boolean }> = {
+  OVERDUE: { title: 'Overdue Follow-ups', primary: 'Send Follow-Up', stripe: 'var(--accent-2)', urgent: true },
+  STALE: { title: 'Gone Quiet', primary: 'Nudge', stripe: 'var(--color-text-faint)' },
+  FRESH: { title: 'Fresh Leads', primary: 'Review & Send', stripe: 'var(--accent)' },
+};
+
+const STATUSES = ['NEW', 'CONTACTED', 'FOLLOW_UP', 'REPLIED', 'CLOSED', 'LOST'];
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function parseJsonArray(value: any): string[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try { return JSON.parse(value); } catch { return value ? [value] : []; }
+  }
+  return [];
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -26,7 +45,7 @@ export default function Home() {
   const [sendingEmail, setSendingEmail] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [view, setView] = useState<View>('map');
+  const [view, setView] = useState<View>('today');
   const [dbLeads, setDbLeads] = useState<any[]>([]);
   const [queueLeads, setQueueLeads] = useState<any[]>([]);
   const [queueMeta, setQueueMeta] = useState<any>(null);
@@ -89,21 +108,16 @@ export default function Home() {
 
   useEffect(() => {
     setMounted(true);
-    fetchLeads();
     fetchQueue();
   }, []);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   // Leads loaded from the DB have painPoints stored as a JSON string;
-  // normalise to an array before the drawer renders it.
+  // normalise to an array before the detail pane renders it.
   const selectLead = (lead: any) => {
     if (!lead) { setSelectedLead(null); return; }
-    let painPoints = lead.painPoints;
-    if (typeof painPoints === 'string') {
-      try { painPoints = JSON.parse(painPoints); } catch { painPoints = [painPoints]; }
-    }
-    setSelectedLead({ ...lead, painPoints });
+    setSelectedLead({ ...lead, painPoints: parseJsonArray(lead.painPoints) });
     setEditingNote(lead.notes ?? '');
     setEditingEmail(lead.outreachEmail ?? '');
     setEditingDealValue(lead.dealValue != null ? String(lead.dealValue) : '');
@@ -116,6 +130,7 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, status }),
       });
+      setSelectedLead((prev: any) => (prev && prev.id === id ? { ...prev, status } : prev));
       await fetchLeads();
       await fetchQueue();
     } catch (e) {}
@@ -176,6 +191,7 @@ export default function Home() {
     setIsScanning(true);
     setLogs([]);
     setLeads([]);
+    setView('map');
 
     try {
       const res = await fetch('/api/scrape', {
@@ -268,7 +284,6 @@ export default function Home() {
       if (data.success && data.url) {
         setSelectedLead({ ...selectedLead, liveWebsiteUrl: data.url });
         fetchLeads();
-        alert("Domain Generated & Deployed: " + data.url);
       } else {
         alert("Deploy failed: " + data.error);
       }
@@ -290,8 +305,8 @@ export default function Home() {
     }
     setSendingEmail(true);
 
-    // Uses the edited text in the drawer, not the raw AI output — this is the
-    // approval gate: whatever's on screen when you hit Send is what goes out.
+    // Uses the edited text in the detail pane, not the raw AI output — this is
+    // the approval gate: whatever's on screen when you hit Send is what goes out.
     let subject = `Optimizing ${selectedLead.name}`;
     let body = editingEmail || selectedLead.outreachEmail || "Hi, we can fix your pain points.";
 
@@ -311,7 +326,7 @@ export default function Home() {
     }
 
     if (selectedLead.liveWebsiteUrl) {
-      body += `\n\nTo show you what I mean, I actually took the liberty of building a live, dynamic prototype of how your digital presence should actively look and function. You can view the private demo I deployed for ${selectedLead.name} right here:\n❤ ${selectedLead.liveWebsiteUrl}\n\nLet me know your thoughts!`;
+      body += `\n\nTo show you what I mean, I actually took the liberty of building a live, dynamic prototype of how your digital presence should actively look and function. You can view the private demo I deployed for ${selectedLead.name} right here:\n${selectedLead.liveWebsiteUrl}\n\nLet me know your thoughts!`;
     }
 
     const html = `
@@ -339,9 +354,7 @@ export default function Home() {
       });
       const data = await res.json();
       if (data.success) {
-        alert("Outreach sent successfully!");
         await markContacted(selectedLead.id);
-        setSelectedLead(null);
       } else {
         alert("Failed to send: " + data.error);
       }
@@ -352,552 +365,456 @@ export default function Home() {
     }
   };
 
+  // ── Tab switching ─────────────────────────────────────────────────────────
+
+  const switchView = (v: View) => {
+    setView(v);
+    if (v === 'today') fetchQueue();
+    if (v === 'board') fetchLeads();
+    if (v === 'numbers') fetchOverview();
+  };
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (!mounted) {
-    return <div style={{ height: '100vh', background: 'var(--bg-primary)' }} />;
+    return <div style={{ height: '100vh', background: 'var(--color-bg)' }} />;
   }
 
+  const contextStrip = `${new Date().toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short' }).toUpperCase()} · ${city.toUpperCase() || '—'} · ${businessType.toUpperCase() || '—'}`;
+
+  const groupedQueue: Record<string, any[]> = { OVERDUE: [], STALE: [], FRESH: [] };
+  queueLeads.forEach((l: any) => { if (groupedQueue[l.queueReason]) groupedQueue[l.queueReason].push(l); });
+
   return (
-    <main style={{ display: 'flex', height: 'calc(100vh - 80px)', padding: '1.5rem', gap: '1.5rem', overflow: 'hidden' }} className="animate-fade-in">
+    <main className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 52px)' }}>
 
-      {/* Left Sidebar */}
-      <div style={{ width: '400px', display: 'flex', flexDirection: 'column', gap: '1.5rem', flexShrink: 0, height: '100%' }}>
-
-        {/* Scan Form */}
-        <div className="glass-panel" style={{ padding: '1.5rem' }}>
-          <h2 style={{ fontSize: '1.2rem', marginBottom: '1rem', color: 'var(--accent)' }}>Start Sector Scan</h2>
-          <form style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-            <div className="input-group" style={{ marginBottom: 0 }}>
-              <label className="input-label" style={{ fontSize: '0.75rem' }}>Business Type</label>
-              <input
-                type="text"
-                className="input-field"
-                placeholder="e.g. Dentists, Plumbers, Roofers"
-                value={businessType}
-                onChange={e => setBusinessType(e.target.value)}
-                style={{ padding: '0.75rem 1rem' }}
-              />
-            </div>
-
-            <div className="input-group" style={{ marginBottom: 0 }}>
-              <label className="input-label" style={{ fontSize: '0.75rem' }}>Target City</label>
-              <input
-                type="text"
-                className="input-field"
-                placeholder="e.g. Austin, Texas"
-                value={city}
-                onChange={e => setCity(e.target.value)}
-                style={{ padding: '0.75rem 1rem' }}
-              />
-            </div>
-
-            <div className="input-group" style={{ marginBottom: 0 }}>
-              <label className="input-label" style={{ fontSize: '0.75rem' }}>Your Business Offer</label>
-              <textarea
-                className="input-field"
-                rows={3}
-                placeholder="Describe what you sell."
-                value={offer}
-                onChange={e => setOffer(e.target.value)}
-                style={{ padding: '0.75rem 1rem' }}
-              ></textarea>
-            </div>
-
-            <button
-              type="button"
-              className="btn btn-primary"
-              style={{ marginTop: '0.5rem', width: '100%', opacity: isScanning ? 0.7 : 1 }}
-              onClick={startScan}
-              disabled={isScanning}
-            >
-              {isScanning ? 'Scanning Sector (Wait)...' : 'Initialise OmniScan'}
-            </button>
-          </form>
+      {/* ── Topbar ────────────────────────────────────────────────────────── */}
+      <div style={{ padding: '14px 24px 12px', borderBottom: '2.5px solid var(--color-text)' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px' }}>
+          <span className="mono" style={{ fontSize: '10.5px', color: 'var(--color-text-muted)' }}>{contextStrip}</span>
         </div>
-
-        {/* Activity Console */}
-        <div className="glass-panel" style={{ padding: '1.5rem', flexGrow: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <h2 style={{ fontSize: '1.2rem', marginBottom: '1rem' }}>Activity Console</h2>
-          <div className="text-secondary" style={{ fontSize: '0.8rem', overflowY: 'auto', flexGrow: 1, paddingRight: '0.5rem', color: 'var(--text-secondary)' }}>
-            {logs.length > 0 ? (
-              [...logs].reverse().map((log, i) => (
-                <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                  <span style={{ color: 'var(--accent)', marginRight: '5px' }}>&gt;</span> {log}
-                </div>
-              ))
-            ) : (
-              <div>Awaiting extraction coordinates...</div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="glass-panel" style={{ flexGrow: 1, padding: 0, overflow: 'hidden', position: 'relative', display: 'flex', flexDirection: 'column' }}>
-
-        {/* View Switcher */}
-        <div style={{ position: 'absolute', top: '1rem', left: '1rem', zIndex: 1000, display: 'flex', gap: '0.5rem', background: 'rgba(5,5,17,0.85)', padding: '0.5rem', borderRadius: '12px', backdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.1)' }}>
-          {([
-            { id: 'map', label: '🗺 Live OmniRadar' },
-            { id: 'pipeline', label: '🧲 Pipeline' },
-            { id: 'queue', label: `📋 Today's Queue${queueMeta ? ` (${queueMeta.total})` : ''}` },
-            { id: 'overview', label: '📊 Overview' },
-          ] as { id: View; label: string }[]).map(tab => (
-            <button
-              key={tab.id}
-              className={`btn ${view === tab.id ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '0.5rem 1rem' }}
-              onClick={() => {
-                setView(tab.id);
-                if (tab.id === 'pipeline' || tab.id === 'queue') fetchLeads();
-                if (tab.id === 'queue') fetchQueue();
-                if (tab.id === 'overview') fetchOverview();
-              }}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {/* ── Map View ─────────────────────────────────────────────────────── */}
-        {view === 'map' && (
-          <>
-            <div style={{ position: 'absolute', bottom: '1rem', left: '1rem', zIndex: 1000, background: 'rgba(5,5,17,0.85)', padding: '0.8rem 1.2rem', borderRadius: '12px', backdropFilter: 'blur(12px)', border: '1px solid rgba(139, 92, 246, 0.3)', boxShadow: '0 4px 20px rgba(0,0,0,0.5)' }}>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                {isScanning ? (
-                  <span className="flex items-center gap-2"><span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--success)', display: 'inline-block', boxShadow: '0 0 10px var(--success)' }}></span> Processing signals...</span>
-                ) : (
-                  <span>Map Ready: {leads.length} Session Targets Tracked</span>
-                )}
-              </div>
-            </div>
-            <DynamicLiveMap leads={leads} onLeadSelect={selectLead} />
-          </>
-        )}
-
-        {/* ── Pipeline Kanban View ──────────────────────────────────────────── */}
-        {view === 'pipeline' && (
-          <div style={{ padding: '5rem 1.5rem 1.5rem', height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <h2 style={{ fontSize: '1.4rem', marginBottom: '1rem', color: '#fff' }}>
-              Pipeline — {dbLeads.length} Leads
-            </h2>
-            {leadsError ? (
-              <div style={{ padding: '1rem', background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444', borderRadius: '8px', color: '#f87171', fontSize: '0.85rem' }}>
-                ⚠️ Couldn't load leads: {leadsError}
-                <button className="btn btn-secondary" style={{ marginLeft: '1rem', fontSize: '0.75rem', padding: '0.3rem 0.7rem' }} onClick={fetchLeads}>
-                  Retry
-                </button>
-              </div>
-            ) : (
-              <div style={{ flexGrow: 1, overflow: 'hidden' }}>
-                <Pipeline
-                  leads={dbLeads}
-                  onStatusChange={updateLeadStatus}
-                  onLeadSelect={selectLead}
-                />
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Today's Queue View ────────────────────────────────────────────── */}
-        {view === 'queue' && (
-          <div style={{ padding: '5rem 2rem 2rem', overflowY: 'auto', height: '100%' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <div>
-                <h2 style={{ fontSize: '1.4rem', color: '#fff' }}>📋 Today's Work Queue</h2>
-                {queueMeta && (
-                  <p style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.4)', marginTop: '4px' }}>
-                    {queueMeta.followUpDue} overdue follow-ups · {queueMeta.staleContacted} stale contacts · {queueMeta.freshNew} new leads
-                  </p>
-                )}
-              </div>
-              <button className="btn btn-secondary" style={{ fontSize: '0.8rem' }} onClick={() => { fetchLeads(); fetchQueue(); }}>
-                🔄 Refresh
-              </button>
-            </div>
-
-            {queueError ? (
-              <div style={{ padding: '1rem', background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444', borderRadius: '8px', color: '#f87171', fontSize: '0.85rem' }}>
-                ⚠️ Couldn't load the queue: {queueError}
-                <button className="btn btn-secondary" style={{ marginLeft: '1rem', fontSize: '0.75rem', padding: '0.3rem 0.7rem' }} onClick={fetchQueue}>
-                  Retry
-                </button>
-              </div>
-            ) : queueLeads.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '4rem', color: 'rgba(255,255,255,0.3)', fontStyle: 'italic' }}>
-                <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🎉</div>
-                <div>Queue is clear! Run an OmniScan to find new leads.</div>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                {queueLeads.map((lead: any) => (
-                  <QueueCard
-                    key={lead.id}
-                    lead={lead}
-                    onSelect={() => selectLead(lead)}
-                    onMarkContacted={() => markContacted(lead.id)}
-                    onSnooze={(days) => snoozeLeadDays(lead.id, days)}
-                    onMarkReplied={() => updateLeadStatus(lead.id, 'REPLIED')}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Overview View (remote supervision) ──────────────────────────────── */}
-        {view === 'overview' && (
-          <div style={{ padding: '5rem 2rem 2rem', overflowY: 'auto', height: '100%' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h2 style={{ fontSize: '1.4rem', color: '#fff' }}>📊 Overview</h2>
-              <button className="btn btn-secondary" style={{ fontSize: '0.8rem' }} onClick={fetchOverview}>
-                🔄 Refresh
-              </button>
-            </div>
-
-            {overviewError ? (
-              <div style={{ padding: '1rem', background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444', borderRadius: '8px', color: '#f87171', fontSize: '0.85rem' }}>
-                ⚠️ Couldn't load overview: {overviewError}
-                <button className="btn btn-secondary" style={{ marginLeft: '1rem', fontSize: '0.75rem', padding: '0.3rem 0.7rem' }} onClick={fetchOverview}>
-                  Retry
-                </button>
-              </div>
-            ) : !overview ? (
-              <div style={{ color: 'rgba(255,255,255,0.4)' }}>Loading...</div>
-            ) : (
-              <>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
-                  <StatTile label="Total Leads" value={overview.totalLeads} />
-                  <StatTile label="Contacted or Beyond" value={overview.contactedOrBeyond} />
-                  <StatTile label="Reply Rate" value={overview.replyRate != null ? `${(overview.replyRate * 100).toFixed(0)}%` : '—'} />
-                  <StatTile label="Close Rate" value={overview.closeRate != null ? `${(overview.closeRate * 100).toFixed(0)}%` : '—'} />
-                  <StatTile label="Closed Revenue" value={`$${overview.totalClosedRevenue.toLocaleString()}`} accent="#10b981" />
-                  <StatTile label="Emails Sent (7d)" value={overview.emailsSentThisWeek} />
-                  <StatTile label="Emails Sent (Total)" value={overview.emailsSentTotal} />
-                  <StatTile label="Scans (7d)" value={overview.scansThisWeek} />
-                  <StatTile label="Demos Deployed" value={overview.demosDeployedTotal} />
-                </div>
-
-                <h3 style={{ fontSize: '1rem', marginBottom: '10px', color: '#fff' }}>Pipeline by Status</h3>
-                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '2rem' }}>
-                  {Object.entries(overview.byStatus || {}).map(([status, count]) => (
-                    <span key={status} style={{ background: 'rgba(255,255,255,0.06)', padding: '6px 14px', borderRadius: '20px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                      {status}: <strong style={{ color: '#fff' }}>{count as number}</strong>
-                    </span>
-                  ))}
-                </div>
-
-                <h3 style={{ fontSize: '1rem', marginBottom: '10px', color: '#fff' }}>Recent Activity</h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  {(overview.recentActivity || []).length === 0 ? (
-                    <div style={{ color: 'rgba(255,255,255,0.3)', fontStyle: 'italic' }}>No activity yet.</div>
-                  ) : (
-                    overview.recentActivity.map((a: any) => (
-                      <div key={a.id} style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                        <span style={{ color: 'var(--accent)', marginRight: '8px' }}>{new Date(a.createdAt).toLocaleString()}</span>
-                        {a.message}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* ── Lead Detail Drawer ────────────────────────────────────────────────── */}
-      {selectedLead && (
-        <div key={selectedLead.id} style={{
-          position: 'fixed', top: 0, right: 0, width: '500px', height: '100vh',
-          background: 'rgba(10, 10, 26, 0.95)', backdropFilter: 'blur(10px)',
-          borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-          padding: '2rem', zIndex: 1000, overflowY: 'auto',
-          boxShadow: '-10px 0 30px rgba(0,0,0,0.5)',
-          animation: 'fadeInUp 0.3s ease-out'
-        }}>
-          <button
-            onClick={() => setSelectedLead(null)}
-            style={{ position: 'absolute', top: '1rem', right: '1rem', background: 'transparent', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer' }}
-          >
-            &times;
-          </button>
-
-          <h2 style={{ fontSize: '1.8rem', marginBottom: '0.5rem' }}>{selectedLead.name}</h2>
-          <div style={{ display: 'flex', gap: '10px', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
-            <span style={{ background: 'rgba(255,255,255,0.1)', padding: '4px 10px', borderRadius: '15px', fontSize: '0.8rem' }}>⭐ {selectedLead.rating}</span>
-            <span style={{ background: 'rgba(255,255,255,0.1)', padding: '4px 10px', borderRadius: '15px', fontSize: '0.8rem' }}>Website Score: {selectedLead.websiteQualityScore}/5</span>
-            <span style={{
-              padding: '4px 10px', borderRadius: '15px', fontSize: '0.8rem', fontWeight: 'bold',
-              background: selectedLead.status === 'NEW' ? 'rgba(59,130,246,0.2)' : selectedLead.status === 'CONTACTED' ? 'rgba(139,92,246,0.2)' : 'rgba(16,185,129,0.2)',
-              color: selectedLead.status === 'NEW' ? '#60a5fa' : selectedLead.status === 'CONTACTED' ? '#a78bfa' : '#34d399',
-            }}>
-              {selectedLead.status}
-            </span>
-          </div>
-
-          {/* Contact Email field */}
-          <div style={{ marginBottom: '1.5rem', background: 'rgba(0,0,0,0.3)', padding: '15px', borderRadius: '8px' }}>
-            <label style={{ fontSize: '0.8rem', color: 'var(--accent)', display: 'block', marginBottom: '6px' }}>📧 Prospect Email</label>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', border: '1.5px solid var(--color-text)', borderRadius: 'var(--radius-md)', padding: '8px 12px', background: 'var(--color-surface)' }}>
             <input
-              type="email"
-              className="input-field"
-              placeholder="prospect@theirdomain.com"
-              defaultValue={selectedLead.contactEmail ?? selectedLead.emails?.[0] ?? ''}
-              onBlur={async (e) => {
-                await fetch('/api/leads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: selectedLead.id, contactEmail: e.target.value }) });
-                setSelectedLead({ ...selectedLead, contactEmail: e.target.value });
-              }}
-              style={{ padding: '0.6rem', width: '100%' }}
+              value={businessType}
+              onChange={e => setBusinessType(e.target.value)}
+              placeholder="Business type — e.g. Dentists"
+              style={{ border: 'none', outline: 'none', background: 'transparent', flex: 1, fontSize: '14.5px', fontFamily: 'inherit', color: 'var(--color-text)' }}
+            />
+            <span style={{ color: 'var(--color-text-faint)', fontSize: '13px' }}>in</span>
+            <input
+              value={city}
+              onChange={e => setCity(e.target.value)}
+              placeholder="City — e.g. Austin, Texas"
+              style={{ border: 'none', outline: 'none', background: 'transparent', flex: 1, fontSize: '14.5px', fontFamily: 'inherit', color: 'var(--color-text)' }}
             />
           </div>
+          <button className="btn btn-primary" onClick={startScan} disabled={isScanning || !businessType || !city}>
+            {isScanning ? 'Scanning…' : 'Scan'}
+          </button>
+        </div>
+        <details style={{ marginTop: '8px' }}>
+          <summary style={{ cursor: 'pointer', fontSize: '12px', color: 'var(--color-text-muted)' }}>
+            Your business offer {offer ? '✓ set' : '— not set'}
+          </summary>
+          <textarea
+            className="input-field"
+            rows={2}
+            value={offer}
+            onChange={e => setOffer(e.target.value)}
+            placeholder="Describe what you sell"
+            style={{ marginTop: '6px' }}
+          />
+        </details>
+      </div>
 
-          {/* Notes */}
-          <div style={{ marginBottom: '1.5rem', background: 'rgba(0,0,0,0.3)', padding: '15px', borderRadius: '8px' }}>
-            <label style={{ fontSize: '0.8rem', color: 'var(--accent)', display: 'block', marginBottom: '6px' }}>📝 Notes</label>
-            <textarea
-              className="input-field"
-              rows={2}
-              placeholder="Add context about this lead..."
-              defaultValue={selectedLead.notes ?? ''}
-              onChange={(e) => setEditingNote(e.target.value)}
-              style={{ padding: '0.6rem', width: '100%' }}
-            />
-            <button
-              onClick={() => saveNote(selectedLead.id)}
-              disabled={savingNote}
-              className="btn btn-secondary"
-              style={{ marginTop: '8px', fontSize: '0.8rem', padding: '0.4rem 1rem' }}
-            >
-              {savingNote ? 'Saving...' : 'Save Note'}
-            </button>
+      {/* ── Tabstrip ──────────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: '20px', alignItems: 'baseline', padding: '0 24px', borderBottom: '1px solid var(--color-divider)', background: 'var(--color-surface-2)' }}>
+        {([
+          { id: 'today', label: 'Today', count: queueMeta?.total },
+          { id: 'board', label: 'Board' },
+          { id: 'map', label: 'Map' },
+          { id: 'numbers', label: 'Numbers' },
+        ] as { id: View; label: string; count?: number }[]).map(tab => (
+          <div
+            key={tab.id}
+            onClick={() => switchView(tab.id)}
+            style={{
+              fontFamily: 'var(--font-heading)', fontSize: '15px', padding: '11px 0', cursor: 'pointer',
+              color: view === tab.id ? 'var(--color-text)' : 'var(--color-text-faint)',
+              borderBottom: view === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
+              display: 'flex', alignItems: 'center', gap: '6px',
+            }}
+          >
+            {tab.label}
+            {tab.count != null && <span className="mono" style={{ fontSize: '11px' }}>{tab.count}</span>}
           </div>
+        ))}
+        {queueMeta && (
+          <span className="mono" style={{ marginLeft: 'auto', alignSelf: 'center', fontSize: '10.5px', color: 'var(--color-text-faint)' }}>
+            {queueMeta.followUpDue} OVERDUE · {queueMeta.staleContacted} STALE · {queueMeta.freshNew} NEW
+          </span>
+        )}
+      </div>
 
-          {/* Pain Points */}
-          <div style={{ background: 'rgba(0,0,0,0.3)', padding: '15px', borderRadius: '8px', marginBottom: '1.5rem' }}>
-            <h3 style={{ fontSize: '1rem', color: 'var(--accent)', marginBottom: '10px' }}>Detected Pain Points</h3>
-            <ul style={{ paddingLeft: '20px', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-              {selectedLead.painPoints?.map((pt: string, i: number) => <li key={i}>{pt}</li>)}
-            </ul>
-          </div>
+      {/* ── Work area: main pane + persistent detail pane ────────────────── */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        <div style={{ flex: 1.4, minWidth: 0, overflowY: 'auto', padding: '18px 24px 24px' }}>
 
-          {/* Outreach Email — editable: nothing sends until you've read and can fix this */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <h3 style={{ fontSize: '1rem', marginBottom: '4px' }}>Outreach Email</h3>
-            {selectedLead.outreachEmail ? (
-              <>
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                  Read this before sending — edit anything that's wrong.
-                </p>
-                <textarea
-                  className="input-field"
-                  rows={11}
-                  value={editingEmail}
-                  onChange={(e) => setEditingEmail(e.target.value)}
-                  style={{ padding: '0.75rem', width: '100%', fontSize: '0.85rem', fontFamily: 'inherit', whiteSpace: 'pre-wrap' }}
-                />
-              </>
-            ) : (
-              <button
-                className="btn btn-primary"
-                onClick={generateAssets}
-                disabled={generating}
-                style={{ width: '100%' }}
-              >
-                {generating ? 'Generating (30–60s)...' : '✨ Generate Email + Landing Page'}
-              </button>
-            )}
-          </div>
+          {/* ── Today (grouped queue) ──────────────────────────────────────── */}
+          {view === 'today' && (
+            <>
+              {queueError ? (
+                <ErrorBanner message={queueError} onRetry={fetchQueue} />
+              ) : queueLeads.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--color-text-faint)', fontStyle: 'italic' }}>
+                  Queue is clear! Run a scan to find new leads.
+                </div>
+              ) : (
+                (['OVERDUE', 'STALE', 'FRESH'] as const).map(reason => {
+                  const rows = groupedQueue[reason];
+                  if (rows.length === 0) return null;
+                  const meta = QUEUE_GROUPS[reason];
+                  return (
+                    <div key={reason} style={{ marginBottom: '26px' }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '10px' }}>
+                        <span style={{ fontFamily: 'var(--font-heading)', fontSize: '16px', color: meta.urgent ? 'var(--accent-2-700)' : 'var(--color-text)' }}>{meta.title}</span>
+                        <span className="mono" style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>{rows.length}</span>
+                      </div>
+                      {rows.map((lead: any) => {
+                        const reasonText = parseJsonArray(lead.painPoints)[0] || parseJsonArray(lead.websiteIssues)[0] || 'Not yet analysed';
+                        const selected = selectedLead?.id === lead.id;
+                        return (
+                          <div
+                            key={lead.id}
+                            onClick={() => selectLead(lead)}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: '14px', padding: '13px 4px',
+                              borderBottom: selected ? 'none' : '1px dashed var(--color-divider-strong)',
+                              background: selected ? 'var(--accent-100)' : 'var(--color-surface)',
+                              margin: selected ? '0 -8px' : 0, paddingLeft: selected ? '12px' : '4px', paddingRight: selected ? '12px' : '4px',
+                              borderRadius: selected ? 'var(--radius-sm)' : 0, cursor: 'pointer',
+                            }}
+                          >
+                            <span style={{ width: '3px', alignSelf: 'stretch', borderRadius: '2px', flexShrink: 0, background: meta.stripe }}></span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontFamily: 'var(--font-heading)', fontSize: '17px', lineHeight: 1.15 }}>{lead.name}</div>
+                              <div style={{ fontSize: '13px', color: 'var(--color-text-muted)', marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reasonText}</div>
+                              <div className="mono" style={{ fontSize: '10.5px', color: 'var(--color-text-faint)', marginTop: '5px' }}>
+                                ★ {lead.rating} · SITE {lead.websiteQualityScore}/5
+                                {lead.followUpAt && ` · DUE ${new Date(lead.followUpAt).toLocaleDateString()}`}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                              <button className="btn btn-primary btn-sm" onClick={() => selectLead(lead)}>{meta.primary}</button>
+                              <button className="icon-btn" title="Snooze 3 days" onClick={() => snoozeLeadDays(lead.id, 3)}><IconClock /></button>
+                              <button className="icon-btn" title="Mark replied" onClick={() => updateLeadStatus(lead.id, 'REPLIED')}><IconCheck /></button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })
+              )}
 
-          {/* Landing Page Preview */}
-          <div style={{ marginBottom: '2rem' }}>
-            <h3 style={{ fontSize: '1rem', marginBottom: '10px' }}>Bespoke Landing Page Preview (Code)</h3>
-            <div style={{ background: 'rgba(0,0,0,0.8)', padding: '15px', borderRadius: '8px', fontSize: '0.8rem', color: '#10b981', maxHeight: '150px', overflowY: 'auto' }}>
-              <code>{selectedLead.landingPageHtml || "Awaiting AI Generation..."}</code>
-            </div>
-          </div>
+              {logs.length > 0 && (
+                <>
+                  <hr style={{ border: 'none', borderTop: '1px solid var(--color-divider)', margin: '20px 0' }} />
+                  <div className="eyebrow" style={{ marginBottom: '6px' }}>Activity</div>
+                  <div style={{ fontSize: '13px', color: 'var(--color-text-muted)', lineHeight: 1.8 }}>
+                    {[...logs].reverse().slice(0, 6).map((log, i) => <div key={i}>{log}</div>)}
+                  </div>
+                </>
+              )}
+            </>
+          )}
 
-          {/* Deploy */}
-          {selectedLead.liveWebsiteUrl ? (
-            <div style={{ marginBottom: '1.5rem', padding: '15px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid #10b981', borderRadius: '8px' }}>
-              <h3 style={{ fontSize: '1rem', color: '#10b981', marginBottom: '4px' }}>✅ Live Prototype Deployed</h3>
-              <a href={selectedLead.liveWebsiteUrl} target="_blank" rel="noreferrer" style={{ color: '#60a5fa', wordBreak: 'break-all', fontSize: '0.9rem' }}>{selectedLead.liveWebsiteUrl}</a>
-            </div>
-          ) : (
-            <div style={{ marginBottom: '1.5rem' }}>
-              <button className="btn btn-secondary" onClick={deploySite} disabled={deploying || !selectedLead.landingPageHtml} style={{ width: '100%', background: 'rgba(139, 92, 246, 0.2)', border: '1px solid var(--accent)' }}>
-                {deploying ? 'Deploying (Wait)...' : '🌐 Deploy Live Demo Site'}
-              </button>
+          {/* ── Board (Pipeline) ────────────────────────────────────────────── */}
+          {view === 'board' && (
+            <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+              {leadsError ? (
+                <ErrorBanner message={leadsError} onRetry={fetchLeads} />
+              ) : (
+                <Pipeline leads={dbLeads} onStatusChange={updateLeadStatus} onLeadSelect={selectLead} />
+              )}
             </div>
           )}
 
-          {/* Send */}
-          <button
-            className="btn btn-primary"
-            style={{ width: '100%', fontSize: '1.1rem', marginBottom: '1.5rem' }}
-            onClick={sendEmail}
-            disabled={sendingEmail}
-          >
-            {sendingEmail ? "Sending..." : "🚀 Send Outreach & Prototype Link"}
-          </button>
-
-          {/* Deal & Documents */}
-          <div style={{ background: 'rgba(0,0,0,0.3)', padding: '15px', borderRadius: '8px' }}>
-            <h3 style={{ fontSize: '1rem', color: 'var(--accent)', marginBottom: '10px' }}>💰 Deal & Documents</h3>
-
-            <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Deal Value (USD)</label>
-            <input
-              type="number"
-              className="input-field"
-              placeholder="1000"
-              value={editingDealValue}
-              onChange={(e) => setEditingDealValue(e.target.value)}
-              onBlur={async () => {
-                const val = editingDealValue ? Number(editingDealValue) : null;
-                await fetch('/api/leads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: selectedLead.id, dealValue: val }) });
-              }}
-              style={{ padding: '0.6rem', width: '100%', marginBottom: '12px' }}
-            />
-
-            <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Contract Link</label>
-            <input
-              type="text"
-              className="input-field"
-              placeholder="Paste contract/proposal link..."
-              defaultValue={selectedLead.contractUrl ?? ''}
-              onBlur={async (e) => {
-                await fetch('/api/leads', {
-                  method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ id: selectedLead.id, contractUrl: e.target.value, contractSentAt: e.target.value ? new Date().toISOString() : null }),
-                });
-              }}
-              style={{ padding: '0.6rem', width: '100%', marginBottom: '12px' }}
-            />
-
-            <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Invoice / Payment Link</label>
-            <input
-              type="text"
-              className="input-field"
-              placeholder="Paste Stripe/invoice link..."
-              defaultValue={selectedLead.invoiceUrl ?? ''}
-              onBlur={async (e) => {
-                await fetch('/api/leads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: selectedLead.id, invoiceUrl: e.target.value }) });
-              }}
-              style={{ padding: '0.6rem', width: '100%' }}
-            />
-
-            {selectedLead.status !== 'CLOSED' ? (
-              <button
-                className="btn btn-primary"
-                style={{ marginTop: '14px', width: '100%', background: 'rgba(16,185,129,0.25)', border: '1px solid #10b981' }}
-                onClick={() => markClosed(selectedLead.id)}
-              >
-                ✅ Mark Closed & Won
-              </button>
-            ) : (
-              <div style={{ marginTop: '14px', color: '#34d399', fontSize: '0.85rem', fontWeight: 600 }}>
-                ✅ Closed{selectedLead.dealValue ? ` — $${selectedLead.dealValue.toLocaleString()}` : ''}
+          {/* ── Map ─────────────────────────────────────────────────────────── */}
+          {view === 'map' && (
+            <div style={{ height: '100%', position: 'relative' }}>
+              <div style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 1000, background: 'var(--color-surface)', border: '1px solid var(--color-divider-strong)', borderRadius: 'var(--radius-sm)', padding: '6px 12px' }}>
+                <span className="mono" style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
+                  {isScanning ? 'Scanning…' : `${leads.length} session targets`}
+                </span>
               </div>
-            )}
-          </div>
+              <DynamicLiveMap leads={leads} onLeadSelect={selectLead} />
+            </div>
+          )}
+
+          {/* ── Numbers (Overview) ──────────────────────────────────────────── */}
+          {view === 'numbers' && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '14px' }}>
+                <button className="icon-btn" title="Refresh" onClick={fetchOverview}><IconRefresh /></button>
+              </div>
+              {overviewError ? (
+                <ErrorBanner message={overviewError} onRetry={fetchOverview} />
+              ) : !overview ? (
+                <div style={{ color: 'var(--color-text-faint)' }}>Loading...</div>
+              ) : (
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '22px 18px', marginBottom: '30px' }}>
+                    <NumTile label="TOTAL LEADS" value={overview.totalLeads} />
+                    <NumTile label="REPLY RATE" value={overview.replyRate != null ? `${(overview.replyRate * 100).toFixed(0)}%` : '—'} />
+                    <NumTile label="CLOSE RATE" value={overview.closeRate != null ? `${(overview.closeRate * 100).toFixed(0)}%` : '—'} />
+                    <NumTile label="CLOSED REVENUE" value={`$${overview.totalClosedRevenue.toLocaleString()}`} plain />
+                    <NumTile label="SCANS (7D)" value={overview.scansThisWeek} plain />
+                    <NumTile label="EMAILS (7D)" value={overview.emailsSentThisWeek} plain />
+                    <NumTile label="EMAILS (TOTAL)" value={overview.emailsSentTotal} plain />
+                    <NumTile label="DEMOS DEPLOYED" value={overview.demosDeployedTotal} plain />
+                    <NumTile label="CONTACTED OR BEYOND" value={overview.contactedOrBeyond} plain />
+                  </div>
+
+                  <div className="eyebrow" style={{ marginBottom: '10px' }}>Pipeline by Status</div>
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '26px' }}>
+                    {Object.entries(overview.byStatus || {}).map(([status, count]) => (
+                      <span key={status} className="mono" style={{ fontSize: '11px', border: '1px solid var(--color-divider-strong)', borderRadius: 'var(--radius-sm)', padding: '4px 10px', color: 'var(--color-text-muted)' }}>
+                        {status}: <strong style={{ color: 'var(--color-text)' }}>{count as number}</strong>
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="eyebrow" style={{ marginBottom: '10px' }}>Recent Activity</div>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    {(overview.recentActivity || []).length === 0 ? (
+                      <div style={{ color: 'var(--color-text-faint)', fontStyle: 'italic', fontSize: '13px' }}>No activity yet.</div>
+                    ) : (
+                      overview.recentActivity.map((a: any) => (
+                        <div key={a.id} style={{ fontSize: '13px', color: 'var(--color-text-muted)', padding: '7px 0', borderBottom: '1px dashed var(--color-divider-strong)' }}>
+                          <span className="mono" style={{ color: 'var(--color-text-faint)', marginRight: '10px', fontSize: '10.5px' }}>{new Date(a.createdAt).toLocaleString()}</span>
+                          {a.message}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </>
+              )}
+            </>
+          )}
         </div>
-      )}
+
+        {/* ── Detail pane — persistent, updates with selection ─────────────── */}
+        <aside style={{ flex: 1, minWidth: '360px', maxWidth: '420px', borderLeft: '1px solid var(--color-divider)', background: 'var(--color-surface)', overflowY: 'auto', padding: '22px 24px 32px' }}>
+          {!selectedLead ? (
+            <div style={{ color: 'var(--color-text-faint)', fontSize: '13px', marginTop: '40px', textAlign: 'center' }}>
+              Select a lead from Today, Board, or Map to see details here.
+            </div>
+          ) : (
+            <div key={selectedLead.id}>
+              <div className="eyebrow" style={{ marginBottom: '6px' }}>{selectedLead.status}</div>
+              <div style={{ fontFamily: 'var(--font-heading)', fontSize: '24px', lineHeight: 1.1, marginBottom: '12px' }}>{selectedLead.name}</div>
+
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '18px' }}>
+                {STATUSES.map(s => (
+                  <span
+                    key={s}
+                    className={`pill${selectedLead.status === s ? ' on' : ''}${selectedLead.status === s && s === 'FOLLOW_UP' ? ' urgent' : ''}`}
+                    onClick={() => updateLeadStatus(selectedLead.id, s)}
+                  >
+                    {s.replace('_', ' ')}
+                  </span>
+                ))}
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Prospect Email</label>
+                <input
+                  type="email"
+                  className="input-field"
+                  placeholder="prospect@theirdomain.com"
+                  defaultValue={selectedLead.contactEmail ?? selectedLead.emails?.[0] ?? ''}
+                  onBlur={async (e) => {
+                    await fetch('/api/leads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: selectedLead.id, contactEmail: e.target.value }) });
+                    setSelectedLead({ ...selectedLead, contactEmail: e.target.value });
+                  }}
+                />
+              </div>
+
+              {(selectedLead.mobileScore != null || selectedLead.desktopScore != null) && (
+                <div style={{ marginBottom: '16px' }}>
+                  <div className="eyebrow" style={{ marginBottom: '8px' }}>Website Test</div>
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                    <ScoreMini label="MOBILE" value={selectedLead.mobileScore} />
+                    <ScoreMini label="DESKTOP" value={selectedLead.desktopScore} />
+                  </div>
+                  {parseJsonArray(selectedLead.websiteIssues).map((issue: string, i: number) => (
+                    <div key={i} style={{ fontSize: '12.5px', color: 'var(--color-text-muted)', padding: '2px 0' }}>
+                      <span style={{ color: 'var(--accent-2)' }}>— </span>{issue}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ marginBottom: '16px' }}>
+                <div className="eyebrow" style={{ marginBottom: '8px' }}>Detected Pain Points</div>
+                <ul style={{ paddingLeft: '18px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
+                  {selectedLead.painPoints?.map((pt: string, i: number) => <li key={i}>{pt}</li>)}
+                </ul>
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Notes</label>
+                <textarea
+                  className="input-field"
+                  rows={2}
+                  placeholder="Add context about this lead..."
+                  defaultValue={selectedLead.notes ?? ''}
+                  onChange={(e) => setEditingNote(e.target.value)}
+                />
+                <button onClick={() => saveNote(selectedLead.id)} disabled={savingNote} className="btn btn-secondary btn-sm" style={{ alignSelf: 'flex-start' }}>
+                  {savingNote ? 'Saving...' : 'Save Note'}
+                </button>
+              </div>
+
+              <div style={{ marginBottom: '16px' }}>
+                <div className="eyebrow" style={{ marginBottom: '6px' }}>Outreach Email</div>
+                {selectedLead.outreachEmail ? (
+                  <>
+                    <p style={{ fontSize: '11.5px', color: 'var(--color-text-faint)', marginBottom: '8px' }}>Read this before sending — edit anything that's wrong.</p>
+                    <textarea
+                      className="input-field"
+                      rows={9}
+                      value={editingEmail}
+                      onChange={(e) => setEditingEmail(e.target.value)}
+                      style={{ fontFamily: 'var(--font-body)', lineHeight: 1.6 }}
+                    />
+                  </>
+                ) : (
+                  <button className="btn btn-primary btn-block" onClick={generateAssets} disabled={generating}>
+                    {generating ? 'Generating (30–60s)...' : 'Generate Email + Landing Page'}
+                  </button>
+                )}
+              </div>
+
+              {selectedLead.landingPageHtml && (
+                <div style={{ marginBottom: '16px' }}>
+                  <div className="eyebrow" style={{ marginBottom: '8px' }}>Landing Page Preview</div>
+                  <iframe
+                    srcDoc={selectedLead.landingPageHtml}
+                    title="Landing page preview"
+                    sandbox=""
+                    style={{ width: '100%', height: '220px', border: '1px solid var(--color-divider-strong)', borderRadius: 'var(--radius-sm)', background: '#fff' }}
+                  />
+                </div>
+              )}
+
+              {selectedLead.liveWebsiteUrl ? (
+                <div style={{ marginBottom: '12px', padding: '12px', border: '1px solid var(--accent)', borderRadius: 'var(--radius-sm)', background: 'var(--accent-100)' }}>
+                  <div style={{ fontSize: '12px', color: 'var(--accent-700)', marginBottom: '4px', fontWeight: 600 }}>Live Demo Deployed</div>
+                  <a href={selectedLead.liveWebsiteUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-700)', wordBreak: 'break-all', fontSize: '12.5px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <IconExternal style={{ width: 13, height: 13 }} /> {selectedLead.liveWebsiteUrl}
+                  </a>
+                </div>
+              ) : (
+                <button className="btn btn-secondary btn-block" style={{ marginBottom: '8px' }} onClick={deploySite} disabled={deploying || !selectedLead.landingPageHtml}>
+                  {deploying ? 'Deploying (Wait)...' : 'Deploy Live Demo Site'}
+                </button>
+              )}
+
+              <button className="btn btn-primary btn-block" style={{ marginBottom: '20px' }} onClick={sendEmail} disabled={sendingEmail}>
+                <IconMail style={{ width: 14, height: 14 }} /> {sendingEmail ? "Sending..." : "Send Outreach & Prototype Link"}
+              </button>
+
+              <hr style={{ border: 'none', borderTop: '1px solid var(--color-divider)', margin: '2px 0 16px' }} />
+
+              <div className="eyebrow" style={{ marginBottom: '10px' }}>Deal & Documents</div>
+              <div className="input-group">
+                <label className="input-label">Deal Value (USD)</label>
+                <input
+                  type="number"
+                  className="input-field mono"
+                  placeholder="1000"
+                  value={editingDealValue}
+                  onChange={(e) => setEditingDealValue(e.target.value)}
+                  onBlur={async () => {
+                    const val = editingDealValue ? Number(editingDealValue) : null;
+                    await fetch('/api/leads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: selectedLead.id, dealValue: val }) });
+                  }}
+                />
+              </div>
+              <div className="input-group">
+                <label className="input-label">Contract Link</label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="Paste contract/proposal link..."
+                  defaultValue={selectedLead.contractUrl ?? ''}
+                  onBlur={async (e) => {
+                    await fetch('/api/leads', {
+                      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ id: selectedLead.id, contractUrl: e.target.value, contractSentAt: e.target.value ? new Date().toISOString() : null }),
+                    });
+                  }}
+                />
+              </div>
+              <div className="input-group">
+                <label className="input-label">Invoice / Payment Link</label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="Paste Stripe/invoice link..."
+                  defaultValue={selectedLead.invoiceUrl ?? ''}
+                  onBlur={async (e) => {
+                    await fetch('/api/leads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: selectedLead.id, invoiceUrl: e.target.value }) });
+                  }}
+                />
+              </div>
+
+              {selectedLead.status !== 'CLOSED' ? (
+                <button className="btn btn-secondary btn-block" style={{ borderColor: 'var(--accent)', color: 'var(--accent-700)' }} onClick={() => markClosed(selectedLead.id)}>
+                  <IconCheck style={{ width: 14, height: 14 }} /> Mark Closed &amp; Won
+                </button>
+              ) : (
+                <div style={{ color: 'var(--accent-700)', fontSize: '13px', fontWeight: 600 }}>
+                  Closed{selectedLead.dealValue ? ` — $${selectedLead.dealValue.toLocaleString()}` : ''}
+                </div>
+              )}
+            </div>
+          )}
+        </aside>
+      </div>
     </main>
   );
 }
 
-// ─── Stat Tile Component ──────────────────────────────────────────────────────
+// ─── Small display components ─────────────────────────────────────────────────
 
-function StatTile({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
+function ErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
-    <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '1rem' }}>
-      <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>{label}</div>
-      <div style={{ fontSize: '1.5rem', fontWeight: 700, color: accent ?? '#fff' }}>{value}</div>
+    <div style={{ padding: '1rem', background: 'var(--accent-2-100)', border: '1px solid var(--accent-2)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-2-700)', fontSize: '13px' }}>
+      Couldn't load this: {message}
+      <button className="btn btn-secondary btn-sm" style={{ marginLeft: '1rem' }} onClick={onRetry}>Retry</button>
     </div>
   );
 }
 
-// ─── Queue Card Component ─────────────────────────────────────────────────────
-
-function QueueCard({ lead, onSelect, onMarkContacted, onSnooze, onMarkReplied }: {
-  lead: any;
-  onSelect: () => void;
-  onMarkContacted: () => void;
-  onSnooze: (days: number) => void;
-  onMarkReplied: () => void;
-}) {
-  const statusColors: Record<string, string> = {
-    NEW: '#3b82f6', CONTACTED: '#8b5cf6', FOLLOW_UP: '#f59e0b', REPLIED: '#10b981',
-  };
-  const color = statusColors[lead.status] ?? '#6b7280';
-
-  const daysSince = lead.lastContactedAt
-    ? Math.floor((Date.now() - new Date(lead.lastContactedAt).getTime()) / 86400000)
-    : null;
-
+function NumTile({ label, value, plain }: { label: string; value: string | number; plain?: boolean }) {
   return (
-    <div style={{
-      background: 'rgba(255,255,255,0.04)',
-      border: `1px solid rgba(255,255,255,0.08)`,
-      borderLeft: `3px solid ${color}`,
-      borderRadius: '10px',
-      padding: '1rem 1.25rem',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '1rem',
-      transition: 'background 0.15s',
-    }}>
-      {/* Info */}
-      <div style={{ flexGrow: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, color: '#fff', fontSize: '0.95rem', marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {lead.name}
-        </div>
-        <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)', display: 'flex', gap: '12px' }}>
-          <span style={{ color }}>● {lead.status}</span>
-          {daysSince !== null && <span>{daysSince}d since contact</span>}
-          {lead.followUpAt && <span>📅 {new Date(lead.followUpAt).toLocaleDateString()}</span>}
-          <span>Site: {lead.websiteQualityScore}/5</span>
-        </div>
-        {lead.notes && (
-          <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.3)', marginTop: '4px', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {lead.notes}
-          </div>
-        )}
-      </div>
+    <div>
+      <div className="mono" style={{ fontFamily: 'var(--font-heading)', fontSize: '30px', lineHeight: 1, color: plain ? 'var(--color-text)' : 'var(--accent)' }}>{value}</div>
+      <div className="mono" style={{ fontSize: '10.5px', letterSpacing: '.05em', color: 'var(--color-text-muted)', marginTop: '6px' }}>{label}</div>
+    </div>
+  );
+}
 
-      {/* Quick Actions */}
-      <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
-        <button
-          onClick={onMarkContacted}
-          className="btn btn-secondary"
-          style={{ fontSize: '0.75rem', padding: '0.4rem 0.8rem', background: 'rgba(139,92,246,0.2)' }}
-        >
-          📤 Contacted
-        </button>
-        <button
-          onClick={() => onSnooze(3)}
-          className="btn btn-secondary"
-          style={{ fontSize: '0.75rem', padding: '0.4rem 0.8rem' }}
-        >
-          💤 +3d
-        </button>
-        <button
-          onClick={onMarkReplied}
-          className="btn btn-secondary"
-          style={{ fontSize: '0.75rem', padding: '0.4rem 0.8rem', background: 'rgba(16,185,129,0.15)' }}
-        >
-          💬 Replied
-        </button>
-        <button
-          onClick={onSelect}
-          className="btn btn-secondary"
-          style={{ fontSize: '0.75rem', padding: '0.4rem 0.8rem' }}
-        >
-          →
-        </button>
-      </div>
+function ScoreMini({ label, value }: { label: string; value: number | null }) {
+  const color = value == null ? 'var(--color-text-faint)' : value >= 70 ? 'var(--accent-700)' : value >= 40 ? '#B8860B' : 'var(--accent-2)';
+  return (
+    <div style={{ flex: 1, border: '1px solid var(--color-divider-strong)', borderRadius: 'var(--radius-sm)', padding: '8px 10px' }}>
+      <div className="mono" style={{ fontSize: '10px', color: 'var(--color-text-faint)' }}>{label}</div>
+      <div className="mono" style={{ fontSize: '18px', fontWeight: 600, marginTop: '2px', color }}>{value ?? '—'}<span style={{ fontSize: '11px', color: 'var(--color-text-faint)' }}>/100</span></div>
     </div>
   );
 }

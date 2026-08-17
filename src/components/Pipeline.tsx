@@ -25,15 +25,23 @@ interface PipelineProps {
 }
 
 // ─── Config ───────────────────────────────────────────────────────────────────
+// Teal = go/positive, magenta = urgent — the same two-accent discipline as the
+// rest of the app. Everything else stays neutral.
 
 const COLUMNS = [
-  { id: 'NEW',       label: '🆕 New',       color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' },
-  { id: 'CONTACTED', label: '📤 Contacted', color: '#8b5cf6', bg: 'rgba(139,92,246,0.12)' },
-  { id: 'FOLLOW_UP', label: '🔔 Follow Up', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
-  { id: 'REPLIED',   label: '💬 Replied',   color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
-  { id: 'CLOSED',    label: '✅ Closed',    color: '#6ee7b7', bg: 'rgba(110,231,183,0.08)' },
-  { id: 'LOST',      label: '❌ Lost',      color: '#6b7280', bg: 'rgba(107,114,128,0.10)' },
+  { id: 'NEW', label: 'New', stripe: 'var(--accent)' },
+  { id: 'CONTACTED', label: 'Contacted', stripe: 'var(--color-text-faint)' },
+  { id: 'FOLLOW_UP', label: 'Follow Up', stripe: 'var(--accent-2)' },
+  { id: 'REPLIED', label: 'Replied', stripe: 'var(--accent)' },
+  { id: 'CLOSED', label: 'Closed', stripe: 'var(--accent)' },
+  { id: 'LOST', label: 'Lost', stripe: 'var(--color-text-faint)' },
 ];
+
+function scoreColor(score: number): string {
+  if (score <= 1) return 'var(--accent-2)';
+  if (score <= 3) return '#B8860B';
+  return 'var(--accent-700)';
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -64,15 +72,7 @@ export default function Pipeline({ leads, onStatusChange, onLeadSelect }: Pipeli
   };
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        gap: '1rem',
-        overflowX: 'auto',
-        height: '100%',
-        paddingBottom: '0.5rem',
-      }}
-    >
+    <div style={{ display: 'flex', gap: '16px', overflowX: 'auto', height: '100%', paddingBottom: '0.5rem' }}>
       {COLUMNS.map((col) => {
         const colLeads = byStatus(col.id);
         const isOver = dragOver === col.id;
@@ -84,61 +84,31 @@ export default function Pipeline({ leads, onStatusChange, onLeadSelect }: Pipeli
             onDragLeave={() => setDragOver(null)}
             onDrop={(e) => handleDrop(e, col.id)}
             style={{
-              minWidth: '220px',
-              flex: '1 0 220px',
-              background: isOver ? col.bg : 'rgba(255,255,255,0.03)',
-              border: `1px solid ${isOver ? col.color : 'rgba(255,255,255,0.08)'}`,
-              borderRadius: '12px',
-              padding: '1rem',
-              transition: 'all 0.15s ease',
+              minWidth: '190px',
+              flex: '1 0 190px',
+              background: isOver ? 'var(--accent-100)' : 'transparent',
+              borderRadius: 'var(--radius-sm)',
+              padding: isOver ? '8px' : 0,
+              transition: 'background 0.12s',
               display: 'flex',
               flexDirection: 'column',
-              gap: '0.75rem',
               overflowY: 'auto',
             }}
           >
             {/* Column Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontWeight: 700, fontSize: '0.85rem', color: col.color }}>
-                {col.label}
-              </span>
-              <span
-                style={{
-                  background: col.bg,
-                  color: col.color,
-                  borderRadius: '20px',
-                  padding: '2px 8px',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                }}
-              >
-                {colLeads.length}
-              </span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: '2px solid var(--color-text)', paddingBottom: '6px', marginBottom: '10px' }}>
+              <span style={{ fontFamily: 'var(--font-heading)', fontSize: '14.5px' }}>{col.label}</span>
+              <span className="mono" style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>{colLeads.length}</span>
             </div>
 
-            {/* Cards */}
             {colLeads.length === 0 && (
-              <div
-                style={{
-                  textAlign: 'center',
-                  color: 'rgba(255,255,255,0.2)',
-                  fontSize: '0.8rem',
-                  paddingTop: '2rem',
-                  fontStyle: 'italic',
-                }}
-              >
-                Drop leads here
+              <div className="mono" style={{ textAlign: 'center', color: 'var(--color-text-faint)', fontSize: '10.5px', paddingTop: '1.5rem', fontStyle: 'italic' }}>
+                drop a lead here
               </div>
             )}
 
             {colLeads.map((lead) => (
-              <LeadCard
-                key={lead.id}
-                lead={lead}
-                colColor={col.color}
-                onDragStart={handleDragStart}
-                onSelect={onLeadSelect}
-              />
+              <LeadCard key={lead.id} lead={lead} onDragStart={handleDragStart} onSelect={onLeadSelect} />
             ))}
           </div>
         );
@@ -151,19 +121,15 @@ export default function Pipeline({ leads, onStatusChange, onLeadSelect }: Pipeli
 
 function LeadCard({
   lead,
-  colColor,
   onDragStart,
   onSelect,
 }: {
   lead: Lead;
-  colColor: string;
   onDragStart: (e: React.DragEvent, id: string) => void;
   onSelect: (lead: Lead) => void;
 }) {
-  const [hovered, setHovered] = useState(false);
-
   const score = lead.websiteQualityScore ?? 0;
-  const scoreColor = score <= 1 ? '#ef4444' : score <= 2 ? '#f59e0b' : '#10b981';
+  const color = scoreColor(score);
 
   const daysSinceContact = lead.lastContactedAt
     ? Math.floor((Date.now() - new Date(lead.lastContactedAt).getTime()) / 86400000)
@@ -173,89 +139,32 @@ function LeadCard({
     <div
       draggable
       onDragStart={(e) => onDragStart(e, lead.id)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onClick={() => onSelect(lead)}
       style={{
-        background: hovered ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.04)',
-        border: `1px solid ${hovered ? colColor : 'rgba(255,255,255,0.06)'}`,
-        borderRadius: '10px',
-        padding: '0.85rem',
+        background: 'var(--color-surface)',
+        border: '1px solid var(--color-divider)',
+        borderRadius: 'var(--radius-sm)',
+        padding: '10px 11px',
+        marginBottom: '8px',
         cursor: 'grab',
-        transition: 'all 0.15s ease',
         userSelect: 'none',
-        transform: hovered ? 'translateY(-1px)' : 'none',
-        boxShadow: hovered ? `0 4px 20px rgba(0,0,0,0.3)` : 'none',
       }}
     >
-      {/* Name */}
-      <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff', marginBottom: '6px', lineHeight: 1.3 }}>
-        {lead.name}
+      <div style={{ fontFamily: 'var(--font-heading)', fontSize: '14px', lineHeight: 1.2 }}>{lead.name}</div>
+
+      <div className="mono" style={{ fontSize: '10px', color: 'var(--color-text-muted)', marginTop: '5px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        {lead.rating && lead.rating !== 'N/A' && <span>★{lead.rating}</span>}
+        <span>SITE {score}/5</span>
+        {daysSinceContact !== null && <span>{daysSinceContact}d ago</span>}
       </div>
 
-      {/* Meta row */}
-      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
-        {lead.rating && lead.rating !== 'N/A' && (
-          <span style={{ fontSize: '0.72rem', color: '#fbbf24' }}>⭐ {lead.rating}</span>
-        )}
-        <span style={{ fontSize: '0.72rem', color: scoreColor }}>
-          Site: {score}/5
-        </span>
-        {daysSinceContact !== null && (
-          <span style={{ fontSize: '0.72rem', color: daysSinceContact > 3 ? '#f87171' : 'rgba(255,255,255,0.5)' }}>
-            {daysSinceContact}d ago
-          </span>
-        )}
-      </div>
-
-      {/* Phone */}
-      {lead.phone && lead.phone !== 'N/A' && (
-        <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.45)', marginBottom: '8px' }}>
-          📞 {lead.phone}
-        </div>
-      )}
-
-      {/* Notes preview */}
       {lead.notes && (
-        <div
-          style={{
-            fontSize: '0.72rem',
-            color: 'rgba(255,255,255,0.4)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            marginBottom: '8px',
-            fontStyle: 'italic',
-          }}
-        >
+        <div style={{ fontSize: '11px', color: 'var(--color-text-faint)', fontStyle: 'italic', marginTop: '5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {lead.notes}
         </div>
       )}
 
-      {/* View button */}
-      <button
-        onClick={() => onSelect(lead)}
-        style={{
-          width: '100%',
-          padding: '5px',
-          background: 'transparent',
-          border: `1px solid rgba(255,255,255,0.1)`,
-          borderRadius: '6px',
-          color: 'rgba(255,255,255,0.6)',
-          fontSize: '0.75rem',
-          cursor: 'pointer',
-          transition: 'all 0.1s',
-        }}
-        onMouseEnter={(e) => {
-          (e.target as HTMLButtonElement).style.background = colColor + '30';
-          (e.target as HTMLButtonElement).style.color = '#fff';
-        }}
-        onMouseLeave={(e) => {
-          (e.target as HTMLButtonElement).style.background = 'transparent';
-          (e.target as HTMLButtonElement).style.color = 'rgba(255,255,255,0.6)';
-        }}
-      >
-        View Assets →
-      </button>
+      <div style={{ height: '3px', background: color, width: `${score * 20}%`, marginTop: '7px', borderRadius: '1px' }} />
     </div>
   );
 }

@@ -33,10 +33,13 @@ export default function LoginPage() {
   };
 
   return (
-    <main style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 80px)' }}>
-      <div className="glass-panel" style={{ padding: '2.5rem', width: '380px' }}>
-        <h1 style={{ fontSize: '1.4rem', marginBottom: '0.5rem' }}>OmniLead</h1>
-        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.5rem' }}>
+    <main style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 52px)' }}>
+      <div style={{
+        background: 'var(--color-surface)', border: '1px solid var(--color-divider)',
+        borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-md)', padding: '2.25rem', width: '360px',
+      }}>
+        <h1 style={{ fontSize: '1.6rem', marginBottom: '0.4rem' }}>OmniLead</h1>
+        <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '1.5rem' }}>
           Enter the team password to continue.
         </p>
         <form onSubmit={login} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -49,7 +52,7 @@ export default function LoginPage() {
             autoFocus
             style={{ padding: '0.75rem 1rem' }}
           />
-          {error && <div style={{ color: '#f87171', fontSize: '0.85rem' }}>{error}</div>}
+          {error && <div style={{ color: 'var(--accent-2)', fontSize: '0.85rem' }}>{error}</div>}
           <button type="submit" className="btn btn-primary" disabled={loading || !password}>
             {loading ? 'Checking...' : 'Log In'}
           </button>
