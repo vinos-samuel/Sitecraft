@@ -18,9 +18,9 @@ export interface ScrapedLead {
   emails: string[];
   socials: string[];
   painPoints: string[];          // business/customer-service issues, from review text
-  websiteQualityScore: number;   // 1-5 triage score, derived from real PageSpeed results
-  mobileScore: number;           // 0-100, PageSpeed performance score (mobile)
-  desktopScore: number;          // 0-100, PageSpeed performance score (desktop)
+  websiteQualityScore: number;      // 1-5 triage score, derived from real PageSpeed results
+  mobileScore: number | null;       // 0-100, PageSpeed performance score (mobile); null = test failed/not run
+  desktopScore: number | null;      // 0-100, PageSpeed performance score (desktop); null = test failed/not run
   websiteIssues: string[];       // concrete, verified reasons for the score
   lat: number;
   lng: number;
@@ -141,8 +141,8 @@ export async function liveScrapeGoogleMaps(
       // Store raw review text temporarily in painPoints; will be replaced by AI
       painPoints: reviewTexts.length > 0 ? reviewTexts : [],
       websiteQualityScore: 0,
-      mobileScore: 0,
-      desktopScore: 0,
+      mobileScore: null,
+      desktopScore: null,
       websiteIssues: [],
       lat: loc.latitude ?? cityLat + (Math.random() - 0.5) * 0.05,
       lng: loc.longitude ?? cityLng + (Math.random() - 0.5) * 0.05,
@@ -229,15 +229,22 @@ async function runPageSpeed(url: string, strategy: 'mobile' | 'desktop', apiKey?
   PSI_CATEGORIES.forEach((c) => params.append('category', c));
   if (apiKey) params.set('key', apiKey);
 
-  // PageSpeed can take 10-20s per call; don't let one slow site stall the whole scan.
+  // Heavy marketing/portfolio sites can genuinely take 25-30s in Lighthouse;
+  // give real room before giving up, without stalling the whole scan forever.
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25000);
+  const timeout = setTimeout(() => controller.abort(), 35000);
   try {
     const res = await fetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${params}`, {
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`PageSpeed API error (${res.status})`);
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`API error ${res.status}${errBody ? `: ${errBody.slice(0, 150)}` : ''}`);
+    }
     return await res.json();
+  } catch (err: any) {
+    if (err.name === 'AbortError') throw new Error('timed out after 35s');
+    throw err;
   } finally {
     clearTimeout(timeout);
   }
@@ -247,9 +254,15 @@ function scoreToInt(score: number | null | undefined): number {
   return score == null ? 0 : Math.round(score * 100);
 }
 
-// Mobile-weighted: most local-business searches happen on a phone.
-function bucketTriageScore(mobilePct: number, desktopPct: number): number {
-  const blended = mobilePct * 0.7 + desktopPct * 0.3;
+// Mobile-weighted: most local-business searches happen on a phone. Falls back
+// to whichever strategy actually succeeded if the other one failed.
+function bucketTriageScore(mobilePct: number | null, desktopPct: number | null): number {
+  let blended: number;
+  if (mobilePct != null && desktopPct != null) blended = mobilePct * 0.7 + desktopPct * 0.3;
+  else if (mobilePct != null) blended = mobilePct;
+  else if (desktopPct != null) blended = desktopPct;
+  else return 2;
+
   if (blended >= 90) return 5;
   if (blended >= 75) return 4;
   if (blended >= 55) return 3;
@@ -277,8 +290,8 @@ export async function assessWebsiteQuality(
   onProgress: (msg: string, leadUpdate?: any) => void
 ): Promise<ScrapedLead> {
   if (!lead.website) {
-    lead.mobileScore = 0;
-    lead.desktopScore = 0;
+    lead.mobileScore = null;
+    lead.desktopScore = null;
     lead.websiteQualityScore = 1;
     lead.websiteIssues = ['No website found for this business — they are invisible to anyone searching online.'];
     onProgress(`[PageSpeed] ${lead.name} has no website. Score: 1/5.`);
@@ -288,42 +301,50 @@ export async function assessWebsiteQuality(
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   onProgress(`[PageSpeed] Testing ${lead.name}'s website (mobile + desktop)...`);
 
-  try {
-    const [mobile, desktop] = await Promise.all([
-      runPageSpeed(lead.website, 'mobile', apiKey),
-      runPageSpeed(lead.website, 'desktop', apiKey),
-    ]);
+  // Mobile and desktop run independently — one strategy failing (timeout, rate
+  // limit, a heavy page) must not discard a successful result from the other,
+  // which is what a single Promise.all + one catch block used to do.
+  const [mobileResult, desktopResult] = await Promise.allSettled([
+    runPageSpeed(lead.website, 'mobile', apiKey),
+    runPageSpeed(lead.website, 'desktop', apiKey),
+  ]);
 
-    const mobilePct = scoreToInt(mobile?.lighthouseResult?.categories?.performance?.score);
-    const desktopPct = scoreToInt(desktop?.lighthouseResult?.categories?.performance?.score);
+  const mobilePct = mobileResult.status === 'fulfilled'
+    ? scoreToInt(mobileResult.value?.lighthouseResult?.categories?.performance?.score)
+    : null;
+  const desktopPct = desktopResult.status === 'fulfilled'
+    ? scoreToInt(desktopResult.value?.lighthouseResult?.categories?.performance?.score)
+    : null;
 
-    // Merge issues from both runs, worst-first, deduped, capped at 5 bullets.
-    const combined = [...extractIssues(mobile?.lighthouseResult), ...extractIssues(desktop?.lighthouseResult)]
-      .sort((a, b) => a.score - b.score);
-    const seen = new Set<string>();
-    const issues: string[] = [];
-    for (const item of combined) {
-      if (seen.has(item.title)) continue;
-      seen.add(item.title);
-      issues.push(item.title);
-      if (issues.length >= 5) break;
-    }
-
-    lead.mobileScore = mobilePct;
-    lead.desktopScore = desktopPct;
-    lead.websiteQualityScore = bucketTriageScore(mobilePct, desktopPct);
-    lead.websiteIssues = issues.length > 0 ? issues : ["No major issues detected — the site passed Google's core checks."];
-
-    onProgress(`[PageSpeed] ${lead.name}: Mobile ${mobilePct}/100, Desktop ${desktopPct}/100 → Score ${lead.websiteQualityScore}/5`);
-  } catch (err: any) {
-    // Test failure isn't proof the site is broken (could be a timeout, or PageSpeed
-    // being blocked) — don't let this get cited to a prospect as a verified fact.
-    onProgress(`[PageSpeed] Could not test ${lead.name}'s website (${err.message}).`);
-    lead.mobileScore = 0;
-    lead.desktopScore = 0;
-    lead.websiteQualityScore = 2;
-    lead.websiteIssues = ['Automated website test could not complete for this site — not a confirmed issue, just unverified.'];
+  // Merge real issues from whichever runs succeeded, worst-first, deduped, capped at 5.
+  const combined = [
+    ...(mobileResult.status === 'fulfilled' ? extractIssues(mobileResult.value?.lighthouseResult) : []),
+    ...(desktopResult.status === 'fulfilled' ? extractIssues(desktopResult.value?.lighthouseResult) : []),
+  ].sort((a, b) => a.score - b.score);
+  const seen = new Set<string>();
+  const issues: string[] = [];
+  for (const item of combined) {
+    if (seen.has(item.title)) continue;
+    seen.add(item.title);
+    issues.push(item.title);
+    if (issues.length >= 5) break;
   }
+
+  // A failed strategy isn't proof the site is broken — surface the real reason
+  // (visible for debugging) but don't let it read as a confirmed site defect.
+  if (mobileResult.status === 'rejected') {
+    issues.unshift(`Mobile test failed (${mobileResult.reason?.message ?? 'unknown error'}) — not a confirmed site issue, just unverified.`);
+  }
+  if (desktopResult.status === 'rejected') {
+    issues.unshift(`Desktop test failed (${desktopResult.reason?.message ?? 'unknown error'}) — not a confirmed site issue, just unverified.`);
+  }
+
+  lead.mobileScore = mobilePct;
+  lead.desktopScore = desktopPct;
+  lead.websiteQualityScore = bucketTriageScore(mobilePct, desktopPct);
+  lead.websiteIssues = issues.length > 0 ? issues.slice(0, 5) : ["No major issues detected — the site passed Google's core checks."];
+
+  onProgress(`[PageSpeed] ${lead.name}: Mobile ${mobilePct ?? 'failed'}, Desktop ${desktopPct ?? 'failed'} → Score ${lead.websiteQualityScore}/5`);
 
   return lead;
 }
@@ -344,15 +365,13 @@ export async function generateOutreachAssets(
   }
 
   try {
-    // Real PageSpeed data always yields a >0 score on at least one strategy when a
-    // website exists. Both scores at 0 with a website present means the test failed
-    // (timeout/blocked), not that the site is confirmed broken — don't let the model
-    // assert that as fact to a real business owner.
-    const hasVerifiedPsiData = lead.website && (lead.mobileScore > 0 || lead.desktopScore > 0);
+    // null means the test genuinely failed/never ran — don't let the model assert
+    // brokenness as fact to a real business owner off an unverified result.
+    const hasVerifiedPsiData = !!lead.website && (lead.mobileScore != null || lead.desktopScore != null);
     const websiteIssuesContext = lead.websiteIssues?.length > 0
       ? hasVerifiedPsiData
         ? `Verified website problems (from Google's own PageSpeed test — cite these specifically, they are credible and checkable, not a guess):
-- Mobile performance score: ${lead.mobileScore}/100, Desktop: ${lead.desktopScore}/100
+- Mobile performance score: ${lead.mobileScore != null ? `${lead.mobileScore}/100` : 'test failed, not verified'}, Desktop: ${lead.desktopScore != null ? `${lead.desktopScore}/100` : 'test failed, not verified'}
 ${lead.websiteIssues.map((i) => `- ${i}`).join('\n')}`
         : lead.website
           ? `Note: their website could not be automatically tested. Do NOT claim their site is broken, slow, or bad — that is unverified. Lead with the business pain points instead, and only mention the website in passing if at all.`
@@ -419,8 +438,8 @@ function buildDemoLeads(
       'Reviews note staff are hard to reach by phone.',
     ],
     websiteQualityScore: 0,
-    mobileScore: 0,
-    desktopScore: 0,
+    mobileScore: null,
+    desktopScore: null,
     websiteIssues: [],
     lat: cityLat + (Math.random() - 0.5) * 0.05,
     lng: cityLng + (Math.random() - 0.5) * 0.05,

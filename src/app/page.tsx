@@ -201,6 +201,22 @@ export default function Home() {
     await fetchQueue();
   };
 
+  // Clears a whole bad batch (e.g. a search that returned the wrong kind of
+  // business) in one action instead of rejecting each result individually.
+  const discardAllPending = async (ids: string[], reason: string) => {
+    await Promise.all(ids.map((id) =>
+      fetch('/api/leads', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, status: 'REJECTED', rejectionReason: reason || null }),
+      })
+    ));
+    setRejectingId(null);
+    setRejectReason('');
+    await fetchLeads();
+    await fetchQueue();
+  };
+
   const saveNote = async (id: string) => {
     setSavingNote(true);
     try {
@@ -419,6 +435,12 @@ export default function Home() {
 
   const pendingLeads = dbLeads.filter((l: any) => l.status === 'PENDING_REVIEW');
 
+  // Soft heuristic: a real Google Maps category is almost always 1-3 words
+  // ("Dentists", "Hair Salons"). A longer phrase is usually someone describing
+  // their ideal customer, which Places can't search for — it'll fuzzy-match
+  // text instead and often surface competitors, not prospects.
+  const businessTypeLooksLikePersona = businessType.trim().split(/\s+/).filter(Boolean).length > 4;
+
   return (
     <main className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 52px)' }}>
 
@@ -432,7 +454,7 @@ export default function Home() {
             <input
               value={businessType}
               onChange={e => setBusinessType(e.target.value)}
-              placeholder="Business type — e.g. Dentists"
+              placeholder="A real Google Maps category — e.g. Dentists, Hair Salons"
               style={{ border: 'none', outline: 'none', background: 'transparent', flex: 1, fontSize: '14.5px', fontFamily: 'inherit', color: 'var(--color-text)' }}
             />
             <span style={{ color: 'var(--color-text-faint)', fontSize: '13px' }}>in</span>
@@ -447,6 +469,12 @@ export default function Home() {
             {isScanning ? 'Scanning…' : 'Scan'}
           </button>
         </div>
+        {businessTypeLooksLikePersona && (
+          <p style={{ fontSize: '11.5px', color: 'var(--accent-2-700)', marginTop: '6px' }}>
+            That reads like a description of your ideal customer, not a business category — Google Maps can't search for "who has a bad website."
+            Search a real category instead (e.g. "Restaurants" or "Accountants") and let the PageSpeed test find the bad ones for you.
+          </p>
+        )}
         <details style={{ marginTop: '8px' }}>
           <summary style={{ cursor: 'pointer', fontSize: '12px', color: 'var(--color-text-muted)' }}>
             Your business offer {offer ? '✓ set' : '— not set'}
@@ -499,9 +527,37 @@ export default function Home() {
           {/* ── Review: qualify or reject scan results before they enter tracking ── */}
           {view === 'review' && (
             <>
-              <p style={{ fontSize: '13px', color: 'var(--color-text-muted)', marginBottom: '18px' }}>
-                Fresh scan results wait here — nothing enters Today or Board until you qualify it.
-              </p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '18px', gap: '12px' }}>
+                <p style={{ fontSize: '13px', color: 'var(--color-text-muted)' }}>
+                  Fresh scan results wait here — nothing enters Today or Board until you qualify it.
+                </p>
+                {pendingLeads.length > 0 && (
+                  rejectingId === 'ALL' ? (
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
+                      <input
+                        className="input-field"
+                        style={{ width: '200px' }}
+                        placeholder="Why discard all? (optional)"
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        autoFocus
+                      />
+                      <button className="btn btn-secondary btn-sm" onClick={() => discardAllPending(pendingLeads.map((l: any) => l.id), rejectReason)}>
+                        Confirm ({pendingLeads.length})
+                      </button>
+                      <button className="icon-btn" title="Cancel" onClick={() => { setRejectingId(null); setRejectReason(''); }}>×</button>
+                    </div>
+                  ) : (
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      style={{ flexShrink: 0, color: 'var(--accent-2-700)', borderColor: 'var(--accent-2)' }}
+                      onClick={() => { setRejectingId('ALL'); setRejectReason(''); }}
+                    >
+                      Discard All ({pendingLeads.length})
+                    </button>
+                  )
+                )}
+              </div>
               {leadsError ? (
                 <ErrorBanner message={leadsError} onRetry={fetchLeads} />
               ) : pendingLeads.length === 0 ? (
