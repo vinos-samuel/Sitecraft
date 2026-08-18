@@ -11,7 +11,7 @@ const DynamicLiveMap = dynamic(() => import('@/components/LiveMap'), {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type View = 'today' | 'board' | 'map' | 'numbers';
+type View = 'review' | 'today' | 'board' | 'map' | 'numbers';
 
 const QUEUE_GROUPS: Record<string, { title: string; primary: string; stripe: string; urgent?: boolean }> = {
   OVERDUE: { title: 'Overdue Follow-ups', primary: 'Send Follow-Up', stripe: 'var(--accent-2)', urgent: true },
@@ -19,6 +19,8 @@ const QUEUE_GROUPS: Record<string, { title: string; primary: string; stripe: str
   FRESH: { title: 'Fresh Leads', primary: 'Review & Send', stripe: 'var(--accent)' },
 };
 
+// PENDING_REVIEW and REJECTED are deliberately not selectable pipeline stages —
+// they're handled by Qualify/Reject in the Review tab, or the Reject shortcut below.
 const STATUSES = ['NEW', 'CONTACTED', 'FOLLOW_UP', 'REPLIED', 'CLOSED', 'LOST'];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -57,6 +59,8 @@ export default function Home() {
   const [editingDealValue, setEditingDealValue] = useState('');
   const [overview, setOverview] = useState<any>(null);
   const [overviewError, setOverviewError] = useState('');
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
 
   // ── Data Fetching ──────────────────────────────────────────────────────────
 
@@ -109,6 +113,7 @@ export default function Home() {
   useEffect(() => {
     setMounted(true);
     fetchQueue();
+    fetchLeads(); // needed for the Review tab's pending-count badge, and Board
   }, []);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -170,6 +175,32 @@ export default function Home() {
     await fetchQueue();
   };
 
+  // ── Review: qualify / reject ─────────────────────────────────────────────
+
+  const qualifyLead = async (id: string) => {
+    await fetch('/api/leads', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status: 'NEW' }),
+    });
+    setSelectedLead((prev: any) => (prev && prev.id === id ? { ...prev, status: 'NEW' } : prev));
+    await fetchLeads();
+    await fetchQueue();
+  };
+
+  const rejectLead = async (id: string, reason: string) => {
+    await fetch('/api/leads', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status: 'REJECTED', rejectionReason: reason || null }),
+    });
+    setSelectedLead((prev: any) => (prev && prev.id === id ? { ...prev, status: 'REJECTED', rejectionReason: reason } : prev));
+    setRejectingId(null);
+    setRejectReason('');
+    await fetchLeads();
+    await fetchQueue();
+  };
+
   const saveNote = async (id: string) => {
     setSavingNote(true);
     try {
@@ -221,6 +252,7 @@ export default function Home() {
                     setIsScanning(false);
                     await fetchLeads();
                     await fetchQueue();
+                    setView('review'); // land on Review so nothing enters the pipeline unchecked
                   } else if (data.message === 'ERROR') {
                     setLogs(prev => [...prev, `Error: ${data.data?.error}`]);
                     setIsScanning(false);
@@ -370,7 +402,7 @@ export default function Home() {
   const switchView = (v: View) => {
     setView(v);
     if (v === 'today') fetchQueue();
-    if (v === 'board') fetchLeads();
+    if (v === 'board' || v === 'review') fetchLeads();
     if (v === 'numbers') fetchOverview();
   };
 
@@ -384,6 +416,8 @@ export default function Home() {
 
   const groupedQueue: Record<string, any[]> = { OVERDUE: [], STALE: [], FRESH: [] };
   queueLeads.forEach((l: any) => { if (groupedQueue[l.queueReason]) groupedQueue[l.queueReason].push(l); });
+
+  const pendingLeads = dbLeads.filter((l: any) => l.status === 'PENDING_REVIEW');
 
   return (
     <main className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 52px)' }}>
@@ -431,6 +465,7 @@ export default function Home() {
       {/* ── Tabstrip ──────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', gap: '20px', alignItems: 'baseline', padding: '0 24px', borderBottom: '1px solid var(--color-divider)', background: 'var(--color-surface-2)' }}>
         {([
+          { id: 'review', label: 'Review', count: pendingLeads.length || undefined },
           { id: 'today', label: 'Today', count: queueMeta?.total },
           { id: 'board', label: 'Board' },
           { id: 'map', label: 'Map' },
@@ -460,6 +495,56 @@ export default function Home() {
       {/* ── Work area: main pane + persistent detail pane ────────────────── */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         <div style={{ flex: 1.4, minWidth: 0, overflowY: 'auto', padding: '18px 24px 24px' }}>
+
+          {/* ── Review: qualify or reject scan results before they enter tracking ── */}
+          {view === 'review' && (
+            <>
+              <p style={{ fontSize: '13px', color: 'var(--color-text-muted)', marginBottom: '18px' }}>
+                Fresh scan results wait here — nothing enters Today or Board until you qualify it.
+              </p>
+              {leadsError ? (
+                <ErrorBanner message={leadsError} onRetry={fetchLeads} />
+              ) : pendingLeads.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--color-text-faint)', fontStyle: 'italic' }}>
+                  Nothing waiting on review. Run a scan to find new leads.
+                </div>
+              ) : (
+                pendingLeads.map((lead: any) => {
+                  const reasonText = parseJsonArray(lead.painPoints)[0] || parseJsonArray(lead.websiteIssues)[0] || 'Not yet analysed';
+                  return (
+                    <div key={lead.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '13px 4px', borderBottom: '1px dashed var(--color-divider-strong)', cursor: 'pointer' }} onClick={() => selectLead(lead)}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontFamily: 'var(--font-heading)', fontSize: '17px', lineHeight: 1.15 }}>{lead.name}</div>
+                        <div style={{ fontSize: '13px', color: 'var(--color-text-muted)', marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reasonText}</div>
+                        <div className="mono" style={{ fontSize: '10.5px', color: 'var(--color-text-faint)', marginTop: '5px' }}>★ {lead.rating} · SITE {lead.websiteQualityScore}/5 · {lead.address}</div>
+                      </div>
+                      <div style={{ flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                        {rejectingId === lead.id ? (
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                            <input
+                              className="input-field"
+                              style={{ width: '180px' }}
+                              placeholder="Why reject? (optional)"
+                              value={rejectReason}
+                              onChange={(e) => setRejectReason(e.target.value)}
+                              autoFocus
+                            />
+                            <button className="btn btn-secondary btn-sm" onClick={() => rejectLead(lead.id, rejectReason)}>Confirm</button>
+                            <button className="icon-btn" title="Cancel" onClick={() => { setRejectingId(null); setRejectReason(''); }}>×</button>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            <button className="btn btn-primary btn-sm" onClick={() => qualifyLead(lead.id)}>Qualify</button>
+                            <button className="btn btn-secondary btn-sm" onClick={() => { setRejectingId(lead.id); setRejectReason(''); }}>Reject</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </>
+          )}
 
           {/* ── Today (grouped queue) ──────────────────────────────────────── */}
           {view === 'today' && (
@@ -616,7 +701,7 @@ export default function Home() {
               <div className="eyebrow" style={{ marginBottom: '6px' }}>{selectedLead.status}</div>
               <div style={{ fontFamily: 'var(--font-heading)', fontSize: '24px', lineHeight: 1.1, marginBottom: '12px' }}>{selectedLead.name}</div>
 
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '18px' }}>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: selectedLead.status === 'REJECTED' ? '8px' : '10px' }}>
                 {STATUSES.map(s => (
                   <span
                     key={s}
@@ -627,6 +712,33 @@ export default function Home() {
                   </span>
                 ))}
               </div>
+
+              {/* Reject — for any lead you decide shouldn't be tracked, not just fresh scan results */}
+              {selectedLead.status === 'REJECTED' ? (
+                <div style={{ fontSize: '12px', color: 'var(--accent-2-700)', marginBottom: '18px' }}>
+                  Rejected{selectedLead.rejectionReason ? ` — ${selectedLead.rejectionReason}` : ''}
+                </div>
+              ) : rejectingId === selectedLead.id ? (
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '18px' }}>
+                  <input
+                    className="input-field"
+                    placeholder="Why reject this lead? (optional)"
+                    value={rejectReason}
+                    onChange={(e) => setRejectReason(e.target.value)}
+                    autoFocus
+                  />
+                  <button className="btn btn-secondary btn-sm" onClick={() => rejectLead(selectedLead.id, rejectReason)}>Confirm</button>
+                  <button className="icon-btn" title="Cancel" onClick={() => { setRejectingId(null); setRejectReason(''); }}>×</button>
+                </div>
+              ) : (
+                <button
+                  className="btn btn-secondary btn-sm"
+                  style={{ marginBottom: '18px', color: 'var(--accent-2-700)', borderColor: 'var(--accent-2)' }}
+                  onClick={() => { setRejectingId(selectedLead.id); setRejectReason(''); }}
+                >
+                  Reject this lead
+                </button>
+              )}
 
               <div className="input-group">
                 <label className="input-label">Prospect Email</label>

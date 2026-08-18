@@ -32,6 +32,7 @@ export async function PUT(request: Request) {
       invoiceUrl,
       depositPaidAt,
       outreachEmail,
+      rejectionReason,
     } = body;
 
     if (!id) {
@@ -55,21 +56,20 @@ export async function PUT(request: Request) {
     if (depositPaidAt !== undefined)
       data.depositPaidAt = depositPaidAt ? new Date(depositPaidAt) : null;
     if (outreachEmail !== undefined) data.outreachEmail = outreachEmail;
+    if (rejectionReason !== undefined) data.rejectionReason = rejectionReason;
 
     const lead = await prisma.lead.update({ where: { id }, data });
 
-    // Log status changes (especially CLOSED, where revenue becomes visible) for the Overview tab.
+    // Log status changes (especially CLOSED and REJECTED, where the reason matters) for the Overview tab.
     if (status !== undefined) {
       try {
-        await prisma.activity.create({
-          data: {
-            type: status === 'CLOSED' ? 'DEAL_CLOSED' : 'STATUS_CHANGE',
-            leadId: id,
-            message: status === 'CLOSED'
-              ? `${lead.name} marked CLOSED${dealValue ? ` — $${dealValue}` : ''}.`
-              : `${lead.name} moved to ${status}.`,
-          },
-        });
+        const type = status === 'CLOSED' ? 'DEAL_CLOSED' : status === 'REJECTED' ? 'LEAD_REJECTED' : status === 'NEW' ? 'LEAD_QUALIFIED' : 'STATUS_CHANGE';
+        const message =
+          status === 'CLOSED' ? `${lead.name} marked CLOSED${dealValue ? ` — $${dealValue}` : ''}.`
+          : status === 'REJECTED' ? `${lead.name} rejected${rejectionReason ? ` — ${rejectionReason}` : ' (no reason given)'}.`
+          : status === 'NEW' ? `${lead.name} qualified into the pipeline.`
+          : `${lead.name} moved to ${status}.`;
+        await prisma.activity.create({ data: { type, leadId: id, message } });
       } catch (e) {
         console.error('Activity log err', e);
       }

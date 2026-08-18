@@ -41,9 +41,11 @@ model Lead {
   contractSentAt      DateTime?
   invoiceUrl          String?   // link to the payment/invoice page (pasted, not generated)
   depositPaidAt       DateTime?
+  rejectionReason     String?   // why a lead was rejected during review — kept as a readable log, not fed to any model
 
-  // Status: NEW | CONTACTED | FOLLOW_UP | REPLIED | CLOSED | LOST
-  status              String    @default("NEW")
+  // Status: PENDING_REVIEW | REJECTED | NEW | CONTACTED | FOLLOW_UP | REPLIED | CLOSED | LOST
+  // Scan results land in PENDING_REVIEW and never touch the real pipeline until qualified to NEW.
+  status              String    @default("PENDING_REVIEW")
   createdAt           DateTime  @default(now())
 }
 
