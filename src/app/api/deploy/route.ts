@@ -30,7 +30,13 @@ export async function POST(request: Request) {
       .slice(0, 40);
     const projectName = `${slug}-demo`;
 
-    const deployRes = await fetch("https://api.vercel.com/v13/deployments", {
+    // Optional — only needed if VERCEL_TOKEN is scoped to a team rather than
+    // your personal account. See the 403 "permission to create a project"
+    // troubleshooting note on this route.
+    const teamId = process.env.VERCEL_TEAM_ID;
+    const url = `https://api.vercel.com/v13/deployments${teamId ? `?teamId=${teamId}` : ''}`;
+
+    const deployRes = await fetch(url, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${vercelToken}`,
@@ -48,6 +54,11 @@ export async function POST(request: Request) {
 
     if (!deployRes.ok) {
       const errTx = await deployRes.text();
+      // "permission to create a project" almost always means VERCEL_TOKEN is
+      // scoped to a team where this account isn't an Owner/Admin — recreate
+      // the token at vercel.com/account/tokens scoped to your personal
+      // account instead (not a team), or add VERCEL_TEAM_ID with a team
+      // where you do have that permission.
       throw new Error(`Vercel deploy error (${deployRes.status}): ${errTx}`);
     }
 

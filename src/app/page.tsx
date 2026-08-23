@@ -868,12 +868,23 @@ export default function Home() {
 
               {selectedLead.landingPageHtml && (
                 <div style={{ marginBottom: '16px' }}>
-                  <div className="eyebrow" style={{ marginBottom: '8px' }}>Landing Page Preview</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '8px' }}>
+                    <div className="eyebrow">Landing Page Preview</div>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => {
+                        const w = window.open('', '_blank');
+                        if (w) { w.document.write(selectedLead.landingPageHtml); w.document.close(); }
+                      }}
+                    >
+                      Expand full preview ↗
+                    </button>
+                  </div>
                   <iframe
                     srcDoc={selectedLead.landingPageHtml}
                     title="Landing page preview"
                     sandbox=""
-                    style={{ width: '100%', height: '220px', border: '1px solid var(--color-divider-strong)', borderRadius: 'var(--radius-sm)', background: '#fff' }}
+                    style={{ width: '100%', height: '420px', border: '1px solid var(--color-divider-strong)', borderRadius: 'var(--radius-sm)', background: '#fff' }}
                   />
                 </div>
               )}
