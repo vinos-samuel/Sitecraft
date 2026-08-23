@@ -566,7 +566,7 @@ export default function Home() {
                 </div>
               ) : (
                 pendingLeads.map((lead: any) => {
-                  const reasonText = parseJsonArray(lead.painPoints)[0] || parseJsonArray(lead.websiteIssues)[0] || 'Not yet analysed';
+                  const reasonText = parseJsonArray(lead.painPoints)[0] || parseJsonArray(lead.websiteIssues)[0] || 'No issues found — reviews are strong and the site checks out';
                   return (
                     <div key={lead.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '13px 4px', borderBottom: '1px dashed var(--color-divider-strong)', cursor: 'pointer' }} onClick={() => selectLead(lead)}>
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -623,7 +623,7 @@ export default function Home() {
                         <span className="mono" style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>{rows.length}</span>
                       </div>
                       {rows.map((lead: any) => {
-                        const reasonText = parseJsonArray(lead.painPoints)[0] || parseJsonArray(lead.websiteIssues)[0] || 'Not yet analysed';
+                        const reasonText = parseJsonArray(lead.painPoints)[0] || parseJsonArray(lead.websiteIssues)[0] || 'No issues found — reviews are strong and the site checks out';
                         const selected = selectedLead?.id === lead.id;
                         return (
                           <div
@@ -827,9 +827,15 @@ export default function Home() {
 
               <div style={{ marginBottom: '16px' }}>
                 <div className="eyebrow" style={{ marginBottom: '8px' }}>Detected Pain Points</div>
-                <ul style={{ paddingLeft: '18px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
-                  {selectedLead.painPoints?.map((pt: string, i: number) => <li key={i}>{pt}</li>)}
-                </ul>
+                {selectedLead.painPoints?.length > 0 ? (
+                  <ul style={{ paddingLeft: '18px', color: 'var(--color-text-muted)', fontSize: '13px' }}>
+                    {selectedLead.painPoints.map((pt: string, i: number) => <li key={i}>{pt}</li>)}
+                  </ul>
+                ) : (
+                  <div style={{ fontSize: '12.5px', color: 'var(--color-text-faint)', fontStyle: 'italic' }}>
+                    None found — reviews are strong and nothing here supports a real pitch angle. Worth a second look before spending outreach on this one.
+                  </div>
+                )}
               </div>
 
               <div className="input-group">

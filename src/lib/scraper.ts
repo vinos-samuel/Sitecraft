@@ -153,12 +153,16 @@ export async function liveScrapeGoogleMaps(
   return leads;
 }
 
-// ─── AI Analysis (customer reviews only) ───────────────────────────────────────
+// ─── AI Analysis (reviews + a real look at the current site) ──────────────────
 
 /**
- * Uses OpenAI to read the business's customer reviews for operational pain
- * points (e.g. "patients complain about hold times") — separate from website
- * quality, which is assessed for real in assessWebsiteQuality() below.
+ * Uses OpenAI to find operational pain points (e.g. "patients complain about
+ * hold times") from customer reviews — grounded against the business's real
+ * current website so it can't claim something is missing that's clearly
+ * there (a real failure mode: a business with an excellent, feature-complete
+ * site but thin/positive reviews would otherwise get a manufactured
+ * "opportunity" that's flatly wrong). Website *technical* quality is a
+ * separate, PageSpeed-based signal — see assessWebsiteQuality() below.
  * If no API key, falls back to using the raw review snippets as-is.
  */
 export async function analyzeWebsiteAndReviews(
@@ -183,31 +187,43 @@ export async function analyzeWebsiteAndReviews(
       ? `Recent customer reviews:\n${lead.painPoints.map(r => `- "${r}"`).join('\n')}`
       : 'No review text available.';
 
+    let siteContext = 'Could not check their current website.';
+    if (lead.website) {
+      const fetched = await fetchWebsiteContext(lead.website);
+      siteContext = fetched
+        ? `Their current website — check this before claiming anything is missing:\n${fetched}`
+        : 'Could not read their current website (blocked or unreachable) — do not assume it lacks anything, just don\'t claim to know what it does or doesn\'t have.';
+    } else {
+      siteContext = 'This business has no website at all.';
+    }
+
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
           role: 'user',
-          content: `You are a sales analyst. Read this business's customer reviews and respond in JSON.
+          content: `You are a sales analyst. Read this business's customer reviews AND their real current website below, then respond in JSON.
 
 Business: ${lead.name}
 Website: ${lead.website || 'none'}
 Rating: ${lead.rating} (${lead.reviewsCount} reviews)
 ${reviewContext}
 
+${siteContext}
+
 Respond ONLY with JSON matching this exact shape:
 {
-  "painPoints": [<2-3 specific operational friction points inferred from the reviews (e.g. booking difficulty, response speed, appointment reminders) — phrase each as a respectful observation and business opportunity, NEVER as a criticism of staff, service quality, or an insult. This will be read by a stranger receiving cold outreach. NOT about the website.>],
+  "painPoints": [<2-3 specific operational friction points inferred from the reviews (e.g. booking difficulty, response speed, appointment reminders) — phrase each as a respectful observation and business opportunity, NEVER as a criticism of staff, service quality, or an insult. This will be read by a stranger receiving cold outreach. NOT about the website's technical performance. CRITICAL: if the website content above already clearly shows online booking, a blog, contact info, or another capability, do NOT claim it's missing or needed — that would be a factually wrong, easily-disproven claim to a real business owner. If reviews are uniformly positive and nothing above supports a real pain point, it is fine and expected to return an empty array rather than invent one.>],
   "inferredEmail": <best-guess contact email based on website domain, or "" if no website>
 }`,
         },
       ],
       response_format: { type: 'json_object' },
-      max_tokens: 250,
+      max_tokens: 300,
     });
 
     const res = JSON.parse(completion.choices[0].message.content ?? '{}');
-    lead.painPoints = res.painPoints ?? lead.painPoints.slice(0, 2);
+    lead.painPoints = Array.isArray(res.painPoints) ? res.painPoints : lead.painPoints.slice(0, 2);
     if (res.inferredEmail) lead.emails = [res.inferredEmail];
 
     onProgress(`[AI Agent] Review analysis complete for ${lead.name}.`);
