@@ -472,10 +472,11 @@ Generate a JSON response with exactly two keys:
 2. Services/offerings — pulled from their actual current site content if available, otherwise reasonably inferred from their business category — do not invent services
 3. Social proof — their real rating and review count if available, styled prominently (this is genuine, verifiable proof, use it)
 4. "What we'd upgrade" — a short section citing the verified website issues or pain points above, framed as opportunity not criticism
-5. Add-on capability previews — clearly labeled as previews of what a paid retainer adds on top of the base rebuild, NOT fully functional, just a compelling visual teaser:
-   - A small floating chat bubble in the bottom-right corner labeled "💬 AI Assistant — answers questions & books appointments 24/7 (preview)"
-   - A "📅 Book an Appointment" section with a simple calendar-style visual, labeled "(live booking available on our Growth plan)"
-   - A short "🔔 Never miss a lead" callout describing automatic follow-up for missed calls or inquiries, labeled as an add-on
+5. Add-on capability previews — read the pain points and website issues above and, for each one that genuinely maps to one of these capabilities, include a small labeled preview section for it (clearly marked as a preview of what a paid retainer adds on top of the base rebuild — NOT fully functional, a visual teaser only). Do NOT include a category that doesn't map to anything actually found above, and word each label specifically for THIS business's real situation, not a generic stock phrase:
+   - Booking/scheduling friction, no online booking → a floating "📅 Book [Appointment/Session/Consultation — pick the word that fits their business]" calendar-style visual
+   - Missed calls, slow response, no after-hours coverage, no live chat → a floating "💬 AI Assistant" chat bubble in the bottom-right corner, answers questions & books appointments 24/7
+   - No client follow-up, re-engagement, or progress tracking mentioned → a "🔔" callout with a label written for their actual situation (e.g. a fitness trainer's clients want progress check-ins, not the same wording a dentist's missed-call follow-up would use — don't reuse one generic phrase for both)
+   - No educational content, explanations, articles, or resources → a "📚 Resources" section previewing an article/blog area
 6. Contact/footer — their real phone and address if available, no fabricated ones
 
 Design rules:
