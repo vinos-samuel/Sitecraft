@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import * as cheerio from 'cheerio';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'fake_key_to_allow_build',
@@ -349,6 +350,55 @@ export async function assessWebsiteQuality(
   return lead;
 }
 
+// ─── Current Website Content ────────────────────────────────────────────────
+
+/**
+ * Fetches and reads the lead's actual current website so the "redesign" is
+ * genuinely a redesign of what they have — same services, same real details,
+ * dramatically better execution — instead of a generic template that happens
+ * to mention their name. Best-effort: many sites block bots, time out, or
+ * aren't fetchable at all; any failure here just means less context, never
+ * a crash.
+ */
+async function fetchWebsiteContext(url: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OmniLeadBot/1.0; +sales research)' },
+    });
+    if (!res.ok) return '';
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!contentType.includes('text/html')) return '';
+
+    // Cap how much we read — a redesign needs a sense of the site, not the whole thing.
+    const html = (await res.text()).slice(0, 300000);
+    const $ = cheerio.load(html);
+    $('script, style, noscript, svg').remove();
+
+    const title = $('title').first().text().trim();
+    const metaDescription = $('meta[name="description"]').attr('content')?.trim() ?? '';
+    const themeColor = $('meta[name="theme-color"]').attr('content')?.trim() ?? '';
+    const headings = $('h1, h2, h3').map((_, el) => $(el).text().replace(/\s+/g, ' ').trim()).get().filter(Boolean).slice(0, 15);
+    const bodyText = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 3000);
+
+    if (!title && !bodyText) return '';
+
+    return [
+      title && `Page title: ${title}`,
+      metaDescription && `Meta description: ${metaDescription}`,
+      themeColor && `Brand color hint: ${themeColor}`,
+      headings.length > 0 && `Headings on the page: ${headings.join(' | ')}`,
+      bodyText && `Visible text (truncated): ${bodyText}`,
+    ].filter(Boolean).join('\n');
+  } catch {
+    return ''; // blocked, timed out, or unreachable — proceed without it
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // ─── Outreach Generation ──────────────────────────────────────────────────────
 
 export async function generateOutreachAssets(
@@ -383,17 +433,55 @@ ${lead.websiteIssues.map((i) => `- ${i}`).join('\n')}`
       ? `Booking link: ${calendarLink} — end the email with a low-friction call to action to book a quick call using this link.`
       : `No booking link available — end with a simple "reply to this email" call to action instead.`;
 
-    const prompt = `You are an expert sales engineer writing cold outreach to a stranger. Be respectful and helpful in tone — never insult the business, its staff, or its service quality, even indirectly. Only state things as fact that are explicitly marked verified below; otherwise speak in terms of opportunity, not accusation.
+    // Read their actual current site so the "redesign" is a genuine upgrade of
+    // what they have, not a generic template with their name pasted in.
+    let currentSiteContext = '';
+    if (lead.website) {
+      onProgress(`[AI Agent] Reading ${lead.name}'s current website...`);
+      currentSiteContext = await fetchWebsiteContext(lead.website);
+    }
+    const currentSiteBlock = currentSiteContext
+      ? `Their current website — use this as the real basis for the redesign (same business, same services, same real details, dramatically better execution — do not invent services they don't actually offer):\n${currentSiteContext}`
+      : lead.website
+        ? `Could not read their current website (blocked or unreachable) — design from the business category, pain points, and reviews below instead. Do not invent specific services or claim to know what's on their current site.`
+        : `This business has no website at all — design a brand-new site from scratch using the category, pain points, and reviews below.`;
 
-Lead: ${lead.name} (${lead.website})
-Business Pain Points (from customer reviews): ${lead.painPoints.join(', ')}
+    const businessFacts = `Real business details (use these exact facts verbatim wherever the design calls for them — do not alter, invent, or guess a phone number, address, or rating):
+- Name: ${lead.name}
+- Phone: ${lead.phone || 'not available — omit phone number rather than inventing one'}
+- Address: ${lead.address || 'not available — omit address rather than inventing one'}
+- Rating: ${lead.rating !== 'N/A' ? `${lead.rating}★ from ${lead.reviewsCount} Google reviews — this is real, verified social proof, use it prominently` : 'not available'}`;
+
+    const prompt = `You are an expert conversion-focused web designer and sales copywriter. The email and landing page you produce ARE the product being sold — a prospect's decision to reply hinges entirely on how good this is, so do the real work: be specific, be visually considered, and never generic-template it. Be respectful in tone — never insult the business, its staff, or its service quality, even indirectly. Only state things as fact that are explicitly marked verified below; everything else, speak in terms of opportunity, not accusation.
+
+${businessFacts}
+
+${currentSiteBlock}
+
+Business pain points (from customer reviews): ${lead.painPoints.join(', ')}
 ${websiteIssuesContext}
-My Offer: ${offer}
+My offer: ${offer}
 ${calendarContext}
 
 Generate a JSON response with exactly two keys:
-"outreachEmail": A highly converting 3-paragraph cold email referencing their specific pain points and offering my service. Start with "Subject: " on the first line.
-"landingPageHtml": A modern, responsive HTML/CSS landing page tailored for them with inline CSS. Include a section explicitly stating how my offer solves their exact pain points. Make it look premium. Output raw HTML string only.`;
+
+"outreachEmail": A highly specific 3-paragraph cold email. Reference at least one real, concrete detail from their actual current website or reviews (not a generic pain point) so it's obviously not a form letter. Reference the redesigned demo you're linking to. Start with "Subject: " on the first line.
+
+"landingPageHtml": A complete, modern, responsive one-page HTML/CSS site with inline CSS (raw HTML string only, no markdown fencing). This is a redesign of THEIR site's actual content — same business, same real services/information (from the current-website context above), executed to a dramatically higher standard. Structure it as:
+1. Hero — their real name, a headline addressing their real opportunity (from the pain points or website issues), no fabricated tagline that misrepresents their business
+2. Services/offerings — pulled from their actual current site content if available, otherwise reasonably inferred from their business category — do not invent services
+3. Social proof — their real rating and review count if available, styled prominently (this is genuine, verifiable proof, use it)
+4. "What we'd upgrade" — a short section citing the verified website issues or pain points above, framed as opportunity not criticism
+5. Add-on capability previews — clearly labeled as previews of what a paid retainer adds on top of the base rebuild, NOT fully functional, just a compelling visual teaser:
+   - A small floating chat bubble in the bottom-right corner labeled "💬 AI Assistant — answers questions & books appointments 24/7 (preview)"
+   - A "📅 Book an Appointment" section with a simple calendar-style visual, labeled "(live booking available on our Growth plan)"
+   - A short "🔔 Never miss a lead" callout describing automatic follow-up for missed calls or inquiries, labeled as an add-on
+6. Contact/footer — their real phone and address if available, no fabricated ones
+
+Design rules:
+- No <img> tags with invented or placeholder URLs — you cannot generate real photos, and a broken image icon kills the premium feel this is supposed to have. Use CSS-only visual treatment instead (gradients, shapes, color, typography) — a clean, image-free layout is a legitimate premium look on its own.
+- Pick a color palette and tone that actually fits this business's industry — a dental clinic and a hair salon should not look the same.
+- Fully self-contained: no external stylesheets, fonts, or scripts.`;
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',

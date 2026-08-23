@@ -861,7 +861,7 @@ export default function Home() {
                   </>
                 ) : (
                   <button className="btn btn-primary btn-block" onClick={generateAssets} disabled={generating}>
-                    {generating ? 'Generating (30–60s)...' : 'Generate Email + Landing Page'}
+                    {generating ? 'Reading their site & generating (up to 90s)...' : 'Generate Email + Landing Page'}
                   </button>
                 )}
               </div>
