@@ -567,7 +567,10 @@ export default function Home() {
               ) : (
                 pendingLeads.map((lead: any) => {
                   const reasonText = parseJsonArray(lead.painPoints)[0] || parseJsonArray(lead.websiteIssues)[0] || 'No issues found — reviews are strong and the site checks out';
-                  const websiteLabel = lead.website ? lead.website.replace(/^https?:\/\//, '').replace(/\/$/, '') : null;
+                  // Strip query strings for display only (Google Business Profile links
+                  // are often decorated with UTM tracking) — the full URL with tracking
+                  // intact is still what the link actually opens, via lead.website.
+                  const websiteLabel = lead.website ? lead.website.replace(/^https?:\/\//, '').replace(/\/$/, '').split('?')[0] : null;
                   return (
                     <div key={lead.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '13px 4px', borderBottom: '1px dashed var(--color-divider-strong)', cursor: 'pointer' }} onClick={() => selectLead(lead)}>
                       <div style={{ flex: 1, minWidth: 0 }}>
