@@ -251,25 +251,32 @@ export default function Home() {
       const decoder = new TextDecoder();
 
       if (reader) {
-        let done = false;
-        while (!done) {
+        let streamDone = false;
+        let scanFinished = false; // true once a DONE/ERROR event actually gets processed
+        let buffer = ''; // carries a partial SSE event across read() chunk boundaries —
+                          // each lead now carries its full crawled site content, so a
+                          // single event can easily span more than one chunk.
+        while (!streamDone) {
           const { value, done: readerDone } = await reader.read();
-          done = readerDone;
+          streamDone = readerDone;
           if (value) {
-            const chunk = decoder.decode(value);
-            const events = chunk.split('\n\n').filter(Boolean);
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split('\n\n');
+            buffer = parts.pop() ?? ''; // last part may be incomplete — hold it for the next chunk
 
-            for (const event of events) {
+            for (const event of parts) {
               if (event.startsWith('data: ')) {
                 try {
                   const data = JSON.parse(event.slice(6));
                   if (data.message === 'DONE') {
+                    scanFinished = true;
                     setLeads(data.data);
                     setIsScanning(false);
                     await fetchLeads();
                     await fetchQueue();
                     setView('review'); // land on Review so nothing enters the pipeline unchecked
                   } else if (data.message === 'ERROR') {
+                    scanFinished = true;
                     setLogs(prev => [...prev, `Error: ${data.data?.error}`]);
                     setIsScanning(false);
                   } else {
@@ -279,11 +286,21 @@ export default function Home() {
                     }
                   }
                 } catch (e) {
-                  // JSON parse error on chunk
+                  // A genuinely malformed event — not just a chunk split, now that
+                  // partial events are buffered above.
                 }
               }
             }
           }
+        }
+        // The connection closed without a DONE/ERROR ever arriving (e.g. the
+        // function hit its time limit mid-scan) — never leave the operator
+        // staring at "Scanning…" forever with no explanation.
+        if (!scanFinished) {
+          setLogs(prev => [...prev, 'Connection ended before the scan finished — some leads may already be saved. Check the Review tab, then run the scan again if needed.']);
+          setIsScanning(false);
+          await fetchLeads();
+          await fetchQueue();
         }
       }
     } catch (err) {
