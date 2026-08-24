@@ -23,6 +23,12 @@ function autoRejectReason(lead: ScrapedLead): string | null {
   return null;
 }
 
+// Strips the bulky crawled-site content before sending leads over the wire —
+// see the "incremental update" comment below for why.
+function forWire(leads: ScrapedLead[]) {
+  return leads.map(({ siteFacts, ...rest }) => rest);
+}
+
 export async function POST(request: Request) {
   const body = await request.json();
   const { businessType, city, offer } = body;
@@ -125,8 +131,14 @@ export async function POST(request: Request) {
 
           enrichedLeads.push(lead);
 
-          // Send incremental update to show leads on map as they process
-          sendEvent("incremental_lead", enrichedLeads);
+          // Send incremental update to show leads on map as they process.
+          // siteFacts (the full crawled site content — several KB per lead)
+          // is already persisted to the DB above; the live map/list only
+          // ever reads name/rating/phone/lat/lng, so it's stripped here —
+          // each "incremental" event re-sends the whole growing list, and
+          // that field alone would make later events in a 10-lead scan
+          // dozens of times bigger than they need to be.
+          sendEvent("incremental_lead", forWire(enrichedLeads));
         }
 
         // Record the scan itself for the Overview tab / remote supervision.
@@ -142,7 +154,7 @@ export async function POST(request: Request) {
           console.error('Activity log err', e);
         }
 
-        sendEvent("DONE", enrichedLeads);
+        sendEvent("DONE", forWire(enrichedLeads));
         controller.close();
       } catch (err: any) {
         sendEvent("ERROR", { error: err.message });
