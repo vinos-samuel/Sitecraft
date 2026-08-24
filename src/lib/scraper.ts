@@ -120,9 +120,12 @@ export async function liveScrapeGoogleMaps(
     return [];
   }
 
-  onProgress(`Found ${places.length} businesses. Preparing for AI analysis...`, places);
-
   // ── Map Places API response → ScrapedLead shape ──────────────────────────────
+  // Built before the progress event below fires — the client puts this
+  // straight on the map, and a raw Places result has no top-level lat/lng
+  // (it's nested under .location.latitude/.longitude), which crashed the
+  // map with "Invalid LatLng object: (undefined, undefined)" the moment a
+  // scan started, every time.
   const leads: ScrapedLead[] = places.map((place, i) => {
     const loc = place.location ?? {};
     // Extract review text for pain-point analysis later
@@ -152,6 +155,8 @@ export async function liveScrapeGoogleMaps(
       lng: loc.longitude ?? cityLng + (Math.random() - 0.5) * 0.05,
     };
   });
+
+  onProgress(`Found ${leads.length} businesses. Preparing for AI analysis...`, leads);
 
   return leads;
 }

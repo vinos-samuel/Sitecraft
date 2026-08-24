@@ -20,8 +20,15 @@ const defaultIcon = new L.Icon({
 function MapBoundsUpdater({ leads }: { leads: any[] }) {
   const map = useMap();
   useEffect(() => {
-    if (leads && leads.length > 0) {
-      const bounds = L.latLngBounds(leads.map(l => [l.lat, l.lng]));
+    // A single lead with a missing/non-numeric lat or lng crashes Leaflet's
+    // LatLngBounds entirely ("Invalid LatLng object") and takes the whole
+    // map down with it — filter to valid coordinates before computing bounds,
+    // the same way the marker rendering below already defends itself.
+    const validCoords = (leads || [])
+      .filter(l => Number.isFinite(l?.lat) && Number.isFinite(l?.lng))
+      .map(l => [l.lat, l.lng] as [number, number]);
+    if (validCoords.length > 0) {
+      const bounds = L.latLngBounds(validCoords);
       map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
     }
     
