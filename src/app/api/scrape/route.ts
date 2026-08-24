@@ -54,9 +54,10 @@ export async function POST(request: Request) {
         // can't claim something is missing that's clearly there. Outreach
         // email + landing page are generated later, on demand per lead, so
         // the scan stays fast and OpenAI spend only goes to leads worth pitching.
-        const enrichedLeads = [];
+        const enrichedLeads: ScrapedLead[] = [];
         let autoRejectedCount = 0;
-        for (const lead of leads) {
+
+        const processOneLead = async (lead: ScrapedLead) => {
           // Crawl runs alongside the PSI test; the pain-point pass needs the
           // crawl's verified facts before it can start, so it's sequenced
           // after — the PSI test keeps running concurrently regardless.
@@ -139,6 +140,18 @@ export async function POST(request: Request) {
           // that field alone would make later events in a 10-lead scan
           // dozens of times bigger than they need to be.
           sendEvent("incremental_lead", forWire(enrichedLeads));
+        };
+
+        // Real PageSpeed tests now take ~20-25s each (they run actual
+        // Lighthouse audits, not a fast pass/fail check) — processing 10
+        // leads one at a time can take 250s+ and risks the platform's
+        // function time limit killing the whole scan mid-run with nothing
+        // sent back to the browser. Processing a few leads at once keeps
+        // total wall-clock time well under that ceiling.
+        const CONCURRENCY = 3;
+        for (let i = 0; i < leads.length; i += CONCURRENCY) {
+          const batch = leads.slice(i, i + CONCURRENCY);
+          await Promise.all(batch.map(processOneLead));
         }
 
         // Record the scan itself for the Overview tab / remote supervision.
