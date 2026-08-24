@@ -567,12 +567,27 @@ export default function Home() {
               ) : (
                 pendingLeads.map((lead: any) => {
                   const reasonText = parseJsonArray(lead.painPoints)[0] || parseJsonArray(lead.websiteIssues)[0] || 'No issues found — reviews are strong and the site checks out';
+                  const websiteLabel = lead.website ? lead.website.replace(/^https?:\/\//, '').replace(/\/$/, '') : null;
                   return (
                     <div key={lead.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '13px 4px', borderBottom: '1px dashed var(--color-divider-strong)', cursor: 'pointer' }} onClick={() => selectLead(lead)}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontFamily: 'var(--font-heading)', fontSize: '17px', lineHeight: 1.15 }}>{lead.name}</div>
                         <div style={{ fontSize: '13px', color: 'var(--color-text-muted)', marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reasonText}</div>
-                        <div className="mono" style={{ fontSize: '10.5px', color: 'var(--color-text-faint)', marginTop: '5px' }}>★ {lead.rating} · SITE {lead.websiteQualityScore}/5 · {lead.address}</div>
+                        <div className="mono" style={{ fontSize: '10.5px', color: 'var(--color-text-faint)', marginTop: '5px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                          <span>★ {lead.rating} · SITE {lead.websiteQualityScore}/5 · {lead.address}</span>
+                          {websiteLabel && (
+                            <a
+                              href={lead.website}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ color: 'var(--color-text-faint)', textDecoration: 'underline dotted' }}
+                              title="Open their real current website — check it against the pitch"
+                            >
+                              ↗ {websiteLabel}
+                            </a>
+                          )}
+                        </div>
                       </div>
                       <div style={{ flexShrink: 0 }} onClick={e => e.stopPropagation()}>
                         {rejectingId === lead.id ? (

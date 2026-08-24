@@ -21,6 +21,8 @@ model Lead {
   mobileScore         Int?      // 0-100, Google PageSpeed performance score (mobile)
   desktopScore        Int?      // 0-100, Google PageSpeed performance score (desktop)
   websiteIssues       String?   // JSON string — concrete, verified reasons for the score (Lighthouse audit titles)
+  siteFacts           String?   // JSON — SiteFacts from the multi-page crawl (see src/lib/site-audit.ts)
+  emailSource         String?   // SCRAPED_MX_VERIFIED | SCRAPED_NO_MX | MANUAL — never a guess
   lat                 Float
   lng                 Float
   offer               String?   // the offer used when this lead was scanned

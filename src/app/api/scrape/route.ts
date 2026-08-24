@@ -1,4 +1,5 @@
 import { liveScrapeGoogleMaps, analyzeWebsiteAndReviews, assessWebsiteQuality, ScrapedLead } from '@/lib/scraper';
+import { crawlSite } from '@/lib/site-audit';
 import { prisma } from '@/lib/prisma';
 
 // Scanning 10 leads + AI analysis takes a while; allow up to 5 minutes on Vercel.
@@ -41,17 +42,32 @@ export async function POST(request: Request) {
         // 1. Scrape Google Maps
         const leads = await liveScrapeGoogleMaps(businessType, city, sendEvent);
 
-        // 2. Analyse each lead: customer reviews (OpenAI) + real website quality
-        // (Google PageSpeed, mobile + desktop) run in parallel per lead.
-        // Outreach email + landing page are generated later, on demand per lead,
-        // so the scan stays fast and OpenAI spend only goes to leads worth pitching.
+        // 2. Analyse each lead: real website quality (Google PageSpeed) runs
+        // alongside a multi-page crawl of the lead's actual site; the review
+        // pain-point pass then runs against the crawl's verified facts, so it
+        // can't claim something is missing that's clearly there. Outreach
+        // email + landing page are generated later, on demand per lead, so
+        // the scan stays fast and OpenAI spend only goes to leads worth pitching.
         const enrichedLeads = [];
         let autoRejectedCount = 0;
         for (const lead of leads) {
-          await Promise.all([
-            analyzeWebsiteAndReviews(lead, sendEvent),
-            assessWebsiteQuality(lead, sendEvent),
-          ]);
+          // Crawl runs alongside the PSI test; the pain-point pass needs the
+          // crawl's verified facts before it can start, so it's sequenced
+          // after — the PSI test keeps running concurrently regardless.
+          const psiTask = assessWebsiteQuality(lead, sendEvent);
+          const siteFacts = lead.website ? await crawlSite(lead.website) : null;
+          lead.siteFacts = siteFacts;
+
+          // Real email discovery — deterministic, from the crawl itself.
+          // Never a guess: if nothing verifiable was found, the field stays empty.
+          if (siteFacts && siteFacts.emails.length > 0) {
+            const best = siteFacts.emails[0];
+            lead.emails = [best.address];
+            lead.emailSource = best.mxVerified ? 'SCRAPED_MX_VERIFIED' : 'SCRAPED_NO_MX';
+          }
+
+          await analyzeWebsiteAndReviews(lead, siteFacts, sendEvent);
+          await psiTask;
 
           try {
             // Dedupe by Google Place ID — re-scanning the same city/niche must not
@@ -80,6 +96,8 @@ export async function POST(request: Request) {
                   mobileScore: lead.mobileScore,
                   desktopScore: lead.desktopScore,
                   websiteIssues: JSON.stringify(lead.websiteIssues),
+                  siteFacts: lead.siteFacts ? JSON.stringify(lead.siteFacts) : null,
+                  emailSource: lead.emailSource || null,
                   lat: lead.lat,
                   lng: lead.lng,
                   offer: offer || null,

@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import * as cheerio from 'cheerio';
+import { SiteFacts, describeSiteFacts } from './site-audit';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'fake_key_to_allow_build',
@@ -17,12 +18,14 @@ export interface ScrapedLead {
   website: string;
   address: string;
   emails: string[];
+  emailSource?: 'SCRAPED_MX_VERIFIED' | 'SCRAPED_NO_MX' | 'MANUAL' | null; // never a guess — see site-audit.ts
   socials: string[];
   painPoints: string[];          // business/customer-service issues, from review text
   websiteQualityScore: number;      // 1-5 triage score, derived from real PageSpeed results
   mobileScore: number | null;       // 0-100, PageSpeed performance score (mobile); null = test failed/not run
   desktopScore: number | null;      // 0-100, PageSpeed performance score (desktop); null = test failed/not run
   websiteIssues: string[];       // concrete, verified reasons for the score
+  siteFacts?: SiteFacts | null;     // multi-page crawl results — the grounding source for every claim
   lat: number;
   lng: number;
   outreachEmail?: string;
@@ -158,15 +161,17 @@ export async function liveScrapeGoogleMaps(
 /**
  * Uses OpenAI to find operational pain points (e.g. "patients complain about
  * hold times") from customer reviews — grounded against the business's real
- * current website so it can't claim something is missing that's clearly
- * there (a real failure mode: a business with an excellent, feature-complete
- * site but thin/positive reviews would otherwise get a manufactured
- * "opportunity" that's flatly wrong). Website *technical* quality is a
- * separate, PageSpeed-based signal — see assessWebsiteQuality() below.
+ * current website (passed in as `siteFacts`, from a multi-page crawl — see
+ * site-audit.ts) so it can't claim something is missing that's clearly there.
+ * Website *technical* quality is a separate, PageSpeed-based signal — see
+ * assessWebsiteQuality() below. Contact email is never touched here — real
+ * email discovery happens deterministically from the crawl, not by guessing;
+ * see crawlSite() in site-audit.ts and how scrape/route.ts wires it in.
  * If no API key, falls back to using the raw review snippets as-is.
  */
 export async function analyzeWebsiteAndReviews(
   lead: ScrapedLead,
+  siteFacts: SiteFacts | null,
   onProgress: (msg: string, leadUpdate?: any) => void
 ): Promise<ScrapedLead> {
   onProgress(`[AI Agent] Reading customer reviews for ${lead.name}...`);
@@ -175,9 +180,6 @@ export async function analyzeWebsiteAndReviews(
     lead.painPoints = lead.painPoints.length > 0
       ? lead.painPoints.slice(0, 2)           // use raw review snippets as placeholders
       : ['No review data available.'];
-    if (lead.website) {
-      lead.emails = [`contact@${lead.website.replace(/https?:\/\//, '').split('/')[0]}`];
-    }
     onProgress(`[AI Agent] Heuristic review pass done for ${lead.name}.`);
     return lead;
   }
@@ -187,22 +189,14 @@ export async function analyzeWebsiteAndReviews(
       ? `Recent customer reviews:\n${lead.painPoints.map(r => `- "${r}"`).join('\n')}`
       : 'No review text available.';
 
-    let siteContext = 'Could not check their current website.';
-    if (lead.website) {
-      const fetched = await fetchWebsiteContext(lead.website);
-      siteContext = fetched
-        ? `Their current website — check this before claiming anything is missing:\n${fetched}`
-        : 'Could not read their current website (blocked or unreachable) — do not assume it lacks anything, just don\'t claim to know what it does or doesn\'t have.';
-    } else {
-      siteContext = 'This business has no website at all.';
-    }
+    const siteContext = describeSiteFacts(siteFacts);
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
           role: 'user',
-          content: `You are a sales analyst. Read this business's customer reviews AND their real current website below, then respond in JSON.
+          content: `You are a sales analyst. Read this business's customer reviews AND the verified facts about their real current website below, then respond in JSON.
 
 Business: ${lead.name}
 Website: ${lead.website || 'none'}
@@ -213,8 +207,7 @@ ${siteContext}
 
 Respond ONLY with JSON matching this exact shape:
 {
-  "painPoints": [<2-3 specific operational friction points inferred from the reviews (e.g. booking difficulty, response speed, appointment reminders) — phrase each as a respectful observation and business opportunity, NEVER as a criticism of staff, service quality, or an insult. This will be read by a stranger receiving cold outreach. NOT about the website's technical performance. CRITICAL: if the website content above already clearly shows online booking, a blog, contact info, or another capability, do NOT claim it's missing or needed — that would be a factually wrong, easily-disproven claim to a real business owner. If reviews are uniformly positive and nothing above supports a real pain point, it is fine and expected to return an empty array rather than invent one.>],
-  "inferredEmail": <best-guess contact email based on website domain, or "" if no website>
+  "painPoints": [<2-3 specific operational friction points inferred from the reviews (e.g. booking difficulty, response speed, appointment reminders) — phrase each as a respectful observation and business opportunity, NEVER as a criticism of staff, service quality, or an insult. This will be read by a stranger receiving cold outreach. NOT about the website's technical performance. CRITICAL: only reference a website capability as missing if the verified facts above mark it "confirmed absent". Never mention a capability marked "not checked" in either direction, and never contradict one marked "confirmed present" — that would be a factually wrong, easily-disproven claim to a real business owner. If reviews are uniformly positive and nothing above supports a real pain point, it is fine and expected to return an empty array rather than invent one.>]
 }`,
         },
       ],
@@ -224,7 +217,6 @@ Respond ONLY with JSON matching this exact shape:
 
     const res = JSON.parse(completion.choices[0].message.content ?? '{}');
     lead.painPoints = Array.isArray(res.painPoints) ? res.painPoints : lead.painPoints.slice(0, 2);
-    if (res.inferredEmail) lead.emails = [res.inferredEmail];
 
     onProgress(`[AI Agent] Review analysis complete for ${lead.name}.`);
   } catch (err: any) {
