@@ -594,7 +594,7 @@ export default function Home() {
                         <div style={{ fontFamily: 'var(--font-heading)', fontSize: '17px', lineHeight: 1.15 }}>{lead.name}</div>
                         <div style={{ fontSize: '13px', color: 'var(--color-text-muted)', marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reasonText}</div>
                         <div className="mono" style={{ fontSize: '10.5px', color: 'var(--color-text-faint)', marginTop: '5px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                          <span>★ {lead.rating} · SITE {lead.websiteQualityScore}/5 · {lead.address}</span>
+                          <span>★ {lead.rating} · {lead.designScore != null ? `DESIGN ${lead.websiteQualityScore}/5` : `SITE ${lead.websiteQualityScore}/5 (perf)`} · {lead.address}</span>
                           {websiteLabel && (
                             <a
                               href={lead.website}
@@ -677,7 +677,7 @@ export default function Home() {
                               <div style={{ fontFamily: 'var(--font-heading)', fontSize: '17px', lineHeight: 1.15 }}>{lead.name}</div>
                               <div style={{ fontSize: '13px', color: 'var(--color-text-muted)', marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reasonText}</div>
                               <div className="mono" style={{ fontSize: '10.5px', color: 'var(--color-text-faint)', marginTop: '5px' }}>
-                                ★ {lead.rating} · SITE {lead.websiteQualityScore}/5
+                                ★ {lead.rating} · {lead.designScore != null ? `DESIGN ${lead.websiteQualityScore}/5` : `SITE ${lead.websiteQualityScore}/5 (perf)`}
                                 {lead.followUpAt && ` · DUE ${new Date(lead.followUpAt).toLocaleDateString()}`}
                               </div>
                             </div>
@@ -845,13 +845,19 @@ export default function Home() {
                 />
               </div>
 
-              {(selectedLead.mobileScore != null || selectedLead.desktopScore != null) && (
+              {(selectedLead.mobileScore != null || selectedLead.desktopScore != null || selectedLead.designScore != null) && (
                 <div style={{ marginBottom: '16px' }}>
                   <div className="eyebrow" style={{ marginBottom: '8px' }}>Website Test</div>
                   <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                    <ScoreMini label="DESIGN" value={selectedLead.designScore} max={5} />
                     <ScoreMini label="MOBILE" value={selectedLead.mobileScore} />
                     <ScoreMini label="DESKTOP" value={selectedLead.desktopScore} />
                   </div>
+                  {parseJsonArray(selectedLead.designReasons).map((reason: string, i: number) => (
+                    <div key={`design-${i}`} style={{ fontSize: '12.5px', color: 'var(--color-text-muted)', padding: '2px 0' }}>
+                      <span style={{ color: 'var(--accent)' }}>— </span>{reason}
+                    </div>
+                  ))}
                   {parseJsonArray(selectedLead.websiteIssues).map((issue: string, i: number) => (
                     <div key={i} style={{ fontSize: '12.5px', color: 'var(--color-text-muted)', padding: '2px 0' }}>
                       <span style={{ color: 'var(--accent-2)' }}>— </span>{issue}
@@ -1029,12 +1035,13 @@ function NumTile({ label, value, plain }: { label: string; value: string | numbe
   );
 }
 
-function ScoreMini({ label, value }: { label: string; value: number | null }) {
-  const color = value == null ? 'var(--color-text-faint)' : value >= 70 ? 'var(--accent-700)' : value >= 40 ? '#B8860B' : 'var(--accent-2)';
+function ScoreMini({ label, value, max = 100 }: { label: string; value: number | null; max?: number }) {
+  const pct = value == null ? null : (value / max) * 100;
+  const color = pct == null ? 'var(--color-text-faint)' : pct >= 70 ? 'var(--accent-700)' : pct >= 40 ? '#B8860B' : 'var(--accent-2)';
   return (
     <div style={{ flex: 1, border: '1px solid var(--color-divider-strong)', borderRadius: 'var(--radius-sm)', padding: '8px 10px' }}>
       <div className="mono" style={{ fontSize: '10px', color: 'var(--color-text-faint)' }}>{label}</div>
-      <div className="mono" style={{ fontSize: '18px', fontWeight: 600, marginTop: '2px', color }}>{value ?? '—'}<span style={{ fontSize: '11px', color: 'var(--color-text-faint)' }}>/100</span></div>
+      <div className="mono" style={{ fontSize: '18px', fontWeight: 600, marginTop: '2px', color }}>{value ?? '—'}<span style={{ fontSize: '11px', color: 'var(--color-text-faint)' }}>/{max}</span></div>
     </div>
   );
 }

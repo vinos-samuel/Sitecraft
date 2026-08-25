@@ -21,9 +21,11 @@ export interface ScrapedLead {
   emailSource?: 'SCRAPED_MX_VERIFIED' | 'SCRAPED_NO_MX' | 'MANUAL' | null; // never a guess — see site-audit.ts
   socials: string[];
   painPoints: string[];          // business/customer-service issues, from review text
-  websiteQualityScore: number;      // 1-5 triage score, derived from real PageSpeed results
+  websiteQualityScore: number;      // 1-5 triage score — design score when confident, else the performance bucket
   mobileScore: number | null;       // 0-100, PageSpeed performance score (mobile); null = test failed/not run
   desktopScore: number | null;      // 0-100, PageSpeed performance score (desktop); null = test failed/not run
+  designScore?: number | null;      // 1-5, vision assessment of the actual rendered screenshot; null = couldn't judge
+  designReasons?: string[];         // short concrete visual observations backing the design score
   websiteIssues: string[];       // concrete, verified reasons for the score
   siteFacts?: SiteFacts | null;     // multi-page crawl results — the grounding source for every claim
   lat: number;
@@ -291,6 +293,68 @@ function extractIssues(lighthouseResult: any): { title: string; score: number }[
     .map((a: any) => ({ title: a.title as string, score: a.score as number }));
 }
 
+// ─── Design Quality (vision score on the real rendered screenshot) ─────────
+
+/**
+ * Scores what the site actually LOOKS like, using the screenshot PageSpeed
+ * already captures while running Lighthouse — not a proxy like load speed.
+ * This is the fix for the failure mode where a modern, professionally
+ * designed site (busy with booking widgets, so it scores poorly on raw
+ * performance) reads as a good pitch target, while a dated-but-fast site
+ * gets auto-rejected as "already good." Judges visual design only — never
+ * infers missing features from the screenshot; capability claims (booking,
+ * blog, etc.) come exclusively from the verified crawl in site-audit.ts.
+ */
+async function assessDesign(
+  screenshotDataUri: string
+): Promise<{ designScore: number | null; reasons: string[]; confident: boolean }> {
+  if (!process.env.OPENAI_API_KEY) {
+    return { designScore: null, reasons: [], confident: false };
+  }
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `Rate this website's VISUAL DESIGN quality from this screenshot alone, on a 1-5 scale:
+1 = broken or ancient (default system fonts, no real mobile layout, walls of unstyled text, looks abandoned)
+2 = weak — dated template, poor spacing/hierarchy, amateur execution
+3 = functional but visibly dated, cluttered, or generic — gets the job done, nothing more
+4 = solid — modern, clean, professional, minor rough edges
+5 = excellent — modern, clearly designed this decade, polished and considered
+
+Judge ONLY what is visible in this screenshot — layout, typography, spacing, colors, how dated or current it looks. Do NOT guess at features you can't see (booking systems, blogs, contact forms) — that is handled separately from real verified data, not from this image.
+
+If the screenshot is blank, corrupted, or too unclear to judge, set "confident": false and "designScore": null instead of guessing.
+
+Respond ONLY with JSON: { "designScore": 1-5 or null, "reasons": ["<=3 short concrete visual observations that justify the score>"], "confident": true or false }`,
+            },
+            { type: 'image_url', image_url: { url: screenshotDataUri } },
+          ] as any,
+        },
+      ],
+      response_format: { type: 'json_object' },
+      max_tokens: 300,
+    });
+
+    const res = JSON.parse(completion.choices[0].message.content ?? '{}');
+    const score = typeof res.designScore === 'number' && res.designScore >= 1 && res.designScore <= 5
+      ? Math.round(res.designScore)
+      : null;
+    return {
+      designScore: res.confident !== false ? score : null,
+      reasons: Array.isArray(res.reasons) ? res.reasons.slice(0, 3) : [],
+      confident: res.confident !== false && score != null,
+    };
+  } catch {
+    return { designScore: null, reasons: [], confident: false };
+  }
+}
+
 /**
  * Runs Google PageSpeed Insights (Lighthouse) against the lead's real website,
  * for both mobile and desktop. Produces a verifiable 1-5 triage score plus
@@ -306,6 +370,8 @@ export async function assessWebsiteQuality(
   if (!lead.website) {
     lead.mobileScore = null;
     lead.desktopScore = null;
+    lead.designScore = null;
+    lead.designReasons = [];
     lead.websiteQualityScore = 1;
     lead.websiteIssues = ['No website found for this business — they are invisible to anyone searching online.'];
     onProgress(`[PageSpeed] ${lead.name} has no website. Score: 1/5.`);
@@ -329,6 +395,17 @@ export async function assessWebsiteQuality(
   const desktopPct = desktopResult.status === 'fulfilled'
     ? scoreToInt(desktopResult.value?.lighthouseResult?.categories?.performance?.score)
     : null;
+
+  // Real design quality, judged from the actual rendered screenshot Lighthouse
+  // already captures — mobile preferred (matches how most prospects will see
+  // it), falling back to desktop if only that run succeeded.
+  const screenshot =
+    (mobileResult.status === 'fulfilled' && mobileResult.value?.lighthouseResult?.audits?.['final-screenshot']?.details?.data) ||
+    (desktopResult.status === 'fulfilled' && desktopResult.value?.lighthouseResult?.audits?.['final-screenshot']?.details?.data) ||
+    null;
+  const design = screenshot ? await assessDesign(screenshot) : { designScore: null, reasons: [], confident: false };
+  lead.designScore = design.designScore;
+  lead.designReasons = design.reasons;
 
   // Merge real issues from whichever runs succeeded, worst-first, deduped, capped at 5.
   const combined = [
@@ -355,10 +432,17 @@ export async function assessWebsiteQuality(
 
   lead.mobileScore = mobilePct;
   lead.desktopScore = desktopPct;
-  lead.websiteQualityScore = bucketTriageScore(mobilePct, desktopPct);
+  // The triage score is what qualification acts on — design quality when we
+  // have a confident read on it (this is the actual pitch: "your site looks
+  // dated"), falling back to the performance bucket only when the vision
+  // call couldn't judge the screenshot at all.
+  lead.websiteQualityScore = design.confident && design.designScore != null
+    ? design.designScore
+    : bucketTriageScore(mobilePct, desktopPct);
   lead.websiteIssues = issues.length > 0 ? issues.slice(0, 5) : ["No major issues detected — the site passed Google's core checks."];
 
-  onProgress(`[PageSpeed] ${lead.name}: Mobile ${mobilePct ?? 'failed'}, Desktop ${desktopPct ?? 'failed'} → Score ${lead.websiteQualityScore}/5`);
+  const scoreSource = design.confident ? 'design' : 'performance fallback';
+  onProgress(`[PageSpeed] ${lead.name}: Mobile ${mobilePct ?? 'failed'}, Desktop ${desktopPct ?? 'failed'} → Score ${lead.websiteQualityScore}/5 (${scoreSource})`);
 
   return lead;
 }

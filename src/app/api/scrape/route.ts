@@ -6,20 +6,44 @@ import { prisma } from '@/lib/prisma';
 export const maxDuration = 300;
 
 // A lead with no real chance of being a good fit for "we'll rebuild your
-// broken site" doesn't need a human to reject it manually every time:
-// - website exists but PageSpeed couldn't test it (blocked/failed) — no
-//   real signal to build a pitch on
-// - the website already scores well — a hard sell for a rebuild pitch
-// (a business with NO website at all is the opposite — the strongest,
-// clearest opportunity — so this deliberately doesn't touch that case.)
-const AUTO_REJECT_MIN_GOOD_SCORE = 4;
+// broken site" doesn't need a human to reject it manually every time.
+// (A business with NO website at all is the opposite — the strongest,
+// clearest opportunity — so this deliberately never touches that case.)
+const AUTO_REJECT_MIN_GOOD_DESIGN = 4;
+
+function blendedPerformance(mobilePct: number | null, desktopPct: number | null): number | null {
+  if (mobilePct != null && desktopPct != null) return mobilePct * 0.7 + desktopPct * 0.3;
+  if (mobilePct != null) return mobilePct;
+  if (desktopPct != null) return desktopPct;
+  return null;
+}
+
 function autoRejectReason(lead: ScrapedLead): string | null {
-  if (lead.website && lead.mobileScore == null && lead.desktopScore == null) {
-    return 'Auto-rejected: website test was blocked or failed — no verified signal to build a pitch on.';
+  if (!lead.website) return null;
+
+  // Untestable: both the PageSpeed test AND the crawl came back with nothing
+  // at all — no signal of any kind to build a pitch on. (PSI alone failing
+  // isn't enough to reject on anymore — the crawl frequently still succeeds
+  // and gives real design/capability signal even when Lighthouse can't run.)
+  const psiFailed = lead.mobileScore == null && lead.desktopScore == null;
+  const crawlFetchedNothing = !lead.siteFacts || lead.siteFacts.pagesFetched.length === 0;
+  if (psiFailed && crawlFetchedNothing) {
+    return 'Auto-rejected: could not test or read the site at all — no verified signal to build a pitch on.';
   }
-  if (lead.websiteQualityScore >= AUTO_REJECT_MIN_GOOD_SCORE) {
-    return `Auto-rejected: website already scores ${lead.websiteQualityScore}/5 — not a strong fit for a rebuild pitch.`;
+
+  // Already good: a confident design read of 4-5/5 is enough on its own —
+  // real testing showed genuinely well-designed SMB sites routinely score
+  // mediocre on raw performance (a booking widget, live chat, or heavy CMS
+  // dragging Lighthouse down), so requiring strong performance too made
+  // this filter almost never fire on exactly the sites it exists to catch.
+  // The pitch is "your site looks dated," not "your site loads slowly" —
+  // design is the signal that actually matters here.
+  const blended = blendedPerformance(lead.mobileScore, lead.desktopScore);
+  if (lead.designScore != null && lead.designScore >= AUTO_REJECT_MIN_GOOD_DESIGN) {
+    const perfNote = blended != null ? `, performance ${Math.round(blended)}/100` : '';
+    return `Auto-rejected: website already looks modern (design ${lead.designScore}/5${perfNote}) — not a strong fit for a rebuild pitch.`;
   }
+
   return null;
 }
 
@@ -102,6 +126,8 @@ export async function POST(request: Request) {
                   websiteQualityScore: lead.websiteQualityScore,
                   mobileScore: lead.mobileScore,
                   desktopScore: lead.desktopScore,
+                  designScore: lead.designScore ?? null,
+                  designReasons: lead.designReasons ? JSON.stringify(lead.designReasons) : null,
                   websiteIssues: JSON.stringify(lead.websiteIssues),
                   siteFacts: lead.siteFacts ? JSON.stringify(lead.siteFacts) : null,
                   emailSource: lead.emailSource || null,
