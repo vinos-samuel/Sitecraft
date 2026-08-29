@@ -496,6 +496,58 @@ async function fetchWebsiteContext(url: string): Promise<string> {
   }
 }
 
+// ─── Site-facts brief (PRD Phase 3, P3-1) ──────────────────────────────────
+// Builds the demo's grounding context from the stored multi-page crawl
+// instead of a second, thinner single-page fetch — the crawl already ran
+// during the scan and is sitting on the lead; re-fetching just the homepage
+// here threw that away and let the model fall back on guessing.
+
+const SERVICE_PAGE_HINT = /service|menu|price|pricing/i;
+
+function buildSiteFactsBrief(siteFacts: SiteFacts): string {
+  const base = describeSiteFacts(siteFacts);
+
+  // Services/menu/pricing pages first — that's where real offerings live.
+  const ordered = [...siteFacts.pagesFetched].sort((a, b) => {
+    const aFirst = SERVICE_PAGE_HINT.test(a.url) ? 0 : 1;
+    const bFirst = SERVICE_PAGE_HINT.test(b.url) ? 0 : 1;
+    return aFirst - bFirst;
+  });
+
+  const pageBlocks = ordered.slice(0, 6).map((p) => [
+    `[${p.url}]`,
+    p.title && `Title: ${p.title}`,
+    p.headings.length > 0 && `Headings: ${p.headings.join(' | ')}`,
+    p.text && `Text: ${p.text.slice(0, 1200)}`,
+  ].filter(Boolean).join('\n'));
+
+  return [
+    base,
+    '',
+    'Full crawled page content (services/menu/pricing pages first where found) — pull real services/offerings from this, do not invent any:',
+    ...pageBlocks,
+  ].join('\n');
+}
+
+// Only capabilities confirmed absent by the crawl may become an add-on
+// teaser — never a guess from reviews or PageSpeed titles. Exactly the
+// three teaser types the product actually offers; a capability with no
+// teaser type (contact info, e-commerce) just gets no teaser.
+function buildTeaserGaps(siteFacts: SiteFacts): string[] {
+  const gaps: string[] = [];
+  const caps = siteFacts.capabilities;
+  if (caps.onlineBooking.status === 'VERIFIED_ABSENT') {
+    gaps.push(`- Online booking — confirmed absent (${caps.onlineBooking.evidence}) → a floating "📅 Book [Appointment/Session/Consultation — pick the word that fits their business]" calendar-style visual, labeled as a preview of a paid add-on.`);
+  }
+  if (caps.liveChat.status === 'VERIFIED_ABSENT') {
+    gaps.push(`- Live chat — confirmed absent (${caps.liveChat.evidence}) → a floating "💬 AI Assistant" chat bubble in the bottom-right corner, answers questions & books appointments 24/7, labeled as a preview of a paid add-on.`);
+  }
+  if (caps.blog.status === 'VERIFIED_ABSENT') {
+    gaps.push(`- Blog/resources — confirmed absent (${caps.blog.evidence}) → a "📚 Resources" section previewing an article/blog area, labeled as a preview of a paid add-on.`);
+  }
+  return gaps;
+}
+
 // ─── Outreach Generation ──────────────────────────────────────────────────────
 
 export async function generateOutreachAssets(
@@ -530,18 +582,32 @@ ${lead.websiteIssues.map((i) => `- ${i}`).join('\n')}`
       ? `Booking link: ${calendarLink} — end the email with a low-friction call to action to book a quick call using this link.`
       : `No booking link available — end with a simple "reply to this email" call to action instead.`;
 
-    // Read their actual current site so the "redesign" is a genuine upgrade of
-    // what they have, not a generic template with their name pasted in.
-    let currentSiteContext = '';
-    if (lead.website) {
-      onProgress(`[AI Agent] Reading ${lead.name}'s current website...`);
-      currentSiteContext = await fetchWebsiteContext(lead.website);
+    // Ground the redesign in the lead's real site. A scan already crawled up
+    // to 6 pages of it (see site-audit.ts) and that's sitting on the lead —
+    // use it directly instead of re-fetching just the homepage again, which
+    // is thinner and throws away the verified capability data entirely.
+    // The second, single-page fetch is now only a fallback for leads that
+    // predate the crawl (or whose crawl found nothing at all).
+    const hasCrawl = !!lead.siteFacts && lead.siteFacts.pagesFetched.length > 0;
+    const teaserGaps = hasCrawl ? buildTeaserGaps(lead.siteFacts!) : [];
+
+    let currentSiteBlock: string;
+    let capabilityGuardrail = '';
+    if (hasCrawl) {
+      currentSiteBlock = `Their current website — use this as the real basis for the redesign (same business, same services, same real details, dramatically better execution — do not invent services they don't actually offer):\n${buildSiteFactsBrief(lead.siteFacts!)}`;
+      capabilityGuardrail = `\nCRITICAL: only a capability marked "confirmed absent" above may ever be described as missing, anywhere in the email or the page. A capability marked "confirmed present" must never be described as missing or sold as an upgrade. A capability marked "not checked" must not be mentioned in either direction — not as present, not as missing, not as a teaser.`;
+    } else {
+      let currentSiteContext = '';
+      if (lead.website) {
+        onProgress(`[AI Agent] Reading ${lead.name}'s current website...`);
+        currentSiteContext = await fetchWebsiteContext(lead.website);
+      }
+      currentSiteBlock = currentSiteContext
+        ? `Their current website — use this as the real basis for the redesign (same business, same services, same real details, dramatically better execution — do not invent services they don't actually offer):\n${currentSiteContext}`
+        : lead.website
+          ? `Could not read their current website (blocked or unreachable) — design from the business category, pain points, and reviews below instead. Do not invent specific services or claim to know what's on their current site.`
+          : `This business has no website at all — design a brand-new site from scratch using the category, pain points, and reviews below.`;
     }
-    const currentSiteBlock = currentSiteContext
-      ? `Their current website — use this as the real basis for the redesign (same business, same services, same real details, dramatically better execution — do not invent services they don't actually offer):\n${currentSiteContext}`
-      : lead.website
-        ? `Could not read their current website (blocked or unreachable) — design from the business category, pain points, and reviews below instead. Do not invent specific services or claim to know what's on their current site.`
-        : `This business has no website at all — design a brand-new site from scratch using the category, pain points, and reviews below.`;
 
     const businessFacts = `Real business details (use these exact facts verbatim wherever the design calls for them — do not alter, invent, or guess a phone number, address, or rating):
 - Name: ${lead.name}
@@ -549,11 +615,30 @@ ${lead.websiteIssues.map((i) => `- ${i}`).join('\n')}`
 - Address: ${lead.address || 'not available — omit address rather than inventing one'}
 - Rating: ${lead.rating !== 'N/A' ? `${lead.rating}★ from ${lead.reviewsCount} Google reviews — this is real, verified social proof, use it prominently` : 'not available'}`;
 
+    // Section 5 of the prompt below: grounded in the verified crawl when we
+    // have one — teasers driven ONLY by capabilities confirmed absent, never
+    // by pain points or PageSpeed titles (that's the bug this fixes: a
+    // Fresha site could still get a Calendly teaser because the old prompt
+    // read reviews to decide, not the actual crawled site). Falls back to
+    // the original pain-point-driven wording verbatim when there's no crawl
+    // to ground it in.
+    const section5 = hasCrawl
+      ? teaserGaps.length > 0
+        ? `5. Add-on capability previews — ONLY include a preview section for a capability listed below as confirmed absent. Do NOT invent a teaser for anything not listed here, and do NOT use the pain points, reviews, or website issues above to decide this — verified capability status from the crawl is the only input for this section:
+${teaserGaps.join('\n')}`
+        : `5. Add-on capability previews — do NOT include this section at all. No capability was confirmed absent for this business (everything checked either came back present or couldn't be verified) — inventing a teaser here would be an unverified, potentially false claim.`
+      : `5. Add-on capability previews — read the pain points and website issues above and, for each one that genuinely maps to one of these capabilities, include a small labeled preview section for it (clearly marked as a preview of what a paid retainer adds on top of the base rebuild — NOT fully functional, a visual teaser only). Do NOT include a category that doesn't map to anything actually found above, and word each label specifically for THIS business's real situation, not a generic stock phrase:
+   - Booking/scheduling friction, no online booking → a floating "📅 Book [Appointment/Session/Consultation — pick the word that fits their business]" calendar-style visual
+   - Missed calls, slow response, no after-hours coverage, no live chat → a floating "💬 AI Assistant" chat bubble in the bottom-right corner, answers questions & books appointments 24/7
+   - No client follow-up, re-engagement, or progress tracking mentioned → a "🔔" callout with a label written for their actual situation (e.g. a fitness trainer's clients want progress check-ins, not the same wording a dentist's missed-call follow-up would use — don't reuse one generic phrase for both)
+   - No educational content, explanations, articles, or resources → a "📚 Resources" section previewing an article/blog area`;
+
     const prompt = `You are an expert conversion-focused web designer and sales copywriter. The email and landing page you produce ARE the product being sold — a prospect's decision to reply hinges entirely on how good this is, so do the real work: be specific, be visually considered, and never generic-template it. Be respectful in tone — never insult the business, its staff, or its service quality, even indirectly. Only state things as fact that are explicitly marked verified below; everything else, speak in terms of opportunity, not accusation.
 
 ${businessFacts}
 
 ${currentSiteBlock}
+${capabilityGuardrail}
 
 Business pain points (from customer reviews): ${lead.painPoints.join(', ')}
 ${websiteIssuesContext}
@@ -569,11 +654,7 @@ Generate a JSON response with exactly two keys:
 2. Services/offerings — pulled from their actual current site content if available, otherwise reasonably inferred from their business category — do not invent services
 3. Social proof — their real rating and review count if available, styled prominently (this is genuine, verifiable proof, use it)
 4. "What we'd upgrade" — a short section citing the verified website issues or pain points above, framed as opportunity not criticism
-5. Add-on capability previews — read the pain points and website issues above and, for each one that genuinely maps to one of these capabilities, include a small labeled preview section for it (clearly marked as a preview of what a paid retainer adds on top of the base rebuild — NOT fully functional, a visual teaser only). Do NOT include a category that doesn't map to anything actually found above, and word each label specifically for THIS business's real situation, not a generic stock phrase:
-   - Booking/scheduling friction, no online booking → a floating "📅 Book [Appointment/Session/Consultation — pick the word that fits their business]" calendar-style visual
-   - Missed calls, slow response, no after-hours coverage, no live chat → a floating "💬 AI Assistant" chat bubble in the bottom-right corner, answers questions & books appointments 24/7
-   - No client follow-up, re-engagement, or progress tracking mentioned → a "🔔" callout with a label written for their actual situation (e.g. a fitness trainer's clients want progress check-ins, not the same wording a dentist's missed-call follow-up would use — don't reuse one generic phrase for both)
-   - No educational content, explanations, articles, or resources → a "📚 Resources" section previewing an article/blog area
+${section5}
 6. Contact/footer — their real phone and address if available, no fabricated ones
 
 Design rules:

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { generateOutreachAssets, ScrapedLead } from '@/lib/scraper';
+import { SiteFacts } from '@/lib/site-audit';
 
 // GPT-4o generates a full email + landing page; allow up to 2 minutes.
 export const maxDuration = 120;
@@ -28,6 +29,23 @@ export async function POST(request: Request) {
       websiteIssues = [];
     }
 
+    // The stored crawl (see site-audit.ts) is the grounding source for the
+    // demo — without it, generateOutreachAssets falls back to a second,
+    // thinner single-page fetch of just the homepage.
+    let siteFacts: SiteFacts | null = null;
+    try {
+      siteFacts = lead.siteFacts ? JSON.parse(lead.siteFacts) : null;
+    } catch {
+      siteFacts = null;
+    }
+
+    let designReasons: string[] = [];
+    try {
+      designReasons = lead.designReasons ? JSON.parse(lead.designReasons) : [];
+    } catch {
+      designReasons = [];
+    }
+
     const scraped: ScrapedLead = {
       id: lead.id,
       name: lead.name,
@@ -42,7 +60,10 @@ export async function POST(request: Request) {
       websiteQualityScore: lead.websiteQualityScore,
       mobileScore: lead.mobileScore,
       desktopScore: lead.desktopScore,
+      designScore: lead.designScore,
+      designReasons,
       websiteIssues,
+      siteFacts,
       lat: lead.lat,
       lng: lead.lng,
     };
