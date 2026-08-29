@@ -1,4 +1,4 @@
-import { liveScrapeGoogleMaps, analyzeWebsiteAndReviews, assessWebsiteQuality, ScrapedLead } from '@/lib/scraper';
+import { liveScrapeGoogleMaps, analyzeWebsiteAndReviews, assessWebsiteQuality, ScrapedLead, isRealBusinessWebsite } from '@/lib/scraper';
 import { crawlSite } from '@/lib/site-audit';
 import { prisma } from '@/lib/prisma';
 
@@ -86,7 +86,9 @@ export async function POST(request: Request) {
           // crawl's verified facts before it can start, so it's sequenced
           // after — the PSI test keeps running concurrently regardless.
           const psiTask = assessWebsiteQuality(lead, sendEvent);
-          const siteFacts = lead.website ? await crawlSite(lead.website) : null;
+          // Facebook/Yelp/etc. are not crawlable business sites — skip the
+          // fetch so we don't mark booking as "absent" on a social profile.
+          const siteFacts = isRealBusinessWebsite(lead.website) ? await crawlSite(lead.website) : null;
           lead.siteFacts = siteFacts;
 
           // Real email discovery — deterministic, from the crawl itself.
@@ -175,7 +177,13 @@ export async function POST(request: Request) {
         // sent back to the browser. Processing a few leads at once keeps
         // total wall-clock time well under that ceiling.
         const CONCURRENCY = 3;
+        const SCAN_BUDGET_MS = 240_000;
+        const startedAt = Date.now();
         for (let i = 0; i < leads.length; i += CONCURRENCY) {
+          if (Date.now() - startedAt >= SCAN_BUDGET_MS) {
+            sendEvent(`Time limit reached — saved ${enrichedLeads.length} of ${leads.length} leads. Run the scan again to pick up the rest (already-saved businesses are skipped automatically).`);
+            break;
+          }
           const batch = leads.slice(i, i + CONCURRENCY);
           await Promise.all(batch.map(processOneLead));
         }

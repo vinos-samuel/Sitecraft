@@ -3,8 +3,8 @@ import { prisma } from '@/lib/prisma';
 import { generateOutreachAssets, ScrapedLead } from '@/lib/scraper';
 import { SiteFacts } from '@/lib/site-audit';
 
-// GPT-4o generates a full email + landing page; allow up to 2 minutes.
-export const maxDuration = 120;
+// Generate + QA + one repair can take a few minutes.
+export const maxDuration = 180;
 
 // POST /api/generate — generate outreach email + landing page for one lead
 export async function POST(request: Request) {
@@ -81,6 +81,6 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, lead: updated });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: err.message || 'Generation failed. Try again.' }, { status: 500 });
   }
 }

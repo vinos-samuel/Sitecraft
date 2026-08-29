@@ -33,6 +33,12 @@ function parseJsonArray(value: any): string[] {
   return [];
 }
 
+function readQaWarning(html: string | null | undefined): string | null {
+  if (!html) return null;
+  const m = html.match(/<!--\s*OMNILEAD_QA_WARNING:\s*([\s\S]*?)\s*-->/);
+  return m ? m[1].trim() : null;
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Home() {
@@ -304,7 +310,7 @@ export default function Home() {
         }
       }
     } catch (err) {
-      console.error(err);
+      setLogs(prev => [...prev, `Error: ${err instanceof Error ? err.message : 'Scan failed. Check your connection and try again.'}`]);
       setIsScanning(false);
     }
   };
@@ -725,6 +731,13 @@ export default function Home() {
                   {isScanning ? 'Scanning…' : `${leads.length} session targets`}
                 </span>
               </div>
+              {logs.length > 0 && (
+                <div style={{ position: 'absolute', left: '8px', bottom: '8px', zIndex: 1000, maxWidth: 'min(520px, 70%)', maxHeight: '40%', overflowY: 'auto', background: 'var(--color-surface)', border: '1px solid var(--color-divider-strong)', borderRadius: 'var(--radius-sm)', padding: '8px 10px' }}>
+                  {[...logs].slice(-6).map((log, i) => (
+                    <div key={i} style={{ fontSize: '12px', color: log.startsWith('Error') ? 'var(--accent-2-700)' : 'var(--color-text-muted)', lineHeight: 1.5 }}>{log}</div>
+                  ))}
+                </div>
+              )}
               <DynamicLiveMap leads={leads} onLeadSelect={selectLead} />
             </div>
           )}
@@ -905,10 +918,13 @@ export default function Home() {
                       onChange={(e) => setEditingEmail(e.target.value)}
                       style={{ fontFamily: 'var(--font-body)', lineHeight: 1.6 }}
                     />
+                    <button className="btn btn-secondary btn-sm" onClick={generateAssets} disabled={generating} style={{ marginTop: '8px' }}>
+                      {generating ? 'Regenerating demo (up to 3 min)...' : 'Regenerate email + demo'}
+                    </button>
                   </>
                 ) : (
                   <button className="btn btn-primary btn-block" onClick={generateAssets} disabled={generating}>
-                    {generating ? 'Reading their site & generating (up to 90s)...' : 'Generate Email + Landing Page'}
+                    {generating ? 'Designing their demo (up to 3 min)...' : 'Generate Email + Landing Page'}
                   </button>
                 )}
               </div>
@@ -927,6 +943,11 @@ export default function Home() {
                       Expand full preview ↗
                     </button>
                   </div>
+                  {readQaWarning(selectedLead.landingPageHtml) && (
+                    <div style={{ fontSize: '12px', color: 'var(--accent-2-700)', background: 'var(--accent-2-100)', border: '1px solid var(--accent-2)', borderRadius: 'var(--radius-sm)', padding: '8px 10px', marginBottom: '8px' }}>
+                      {readQaWarning(selectedLead.landingPageHtml)}
+                    </div>
+                  )}
                   <iframe
                     srcDoc={selectedLead.landingPageHtml}
                     title="Landing page preview"
