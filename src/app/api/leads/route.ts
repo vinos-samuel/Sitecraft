@@ -41,7 +41,13 @@ export async function PUT(request: Request) {
 
     const data: Record<string, any> = {};
     if (status !== undefined) data.status = status;
-    if (contactEmail !== undefined) data.contactEmail = contactEmail;
+    if (contactEmail !== undefined) {
+      data.contactEmail = contactEmail;
+      // Typing an address is a human verification — required before send.
+      if (typeof contactEmail === 'string' && contactEmail.includes('@')) {
+        data.emailSource = 'MANUAL';
+      }
+    }
     if (notes !== undefined) data.notes = notes;
     if (lastContactedAt !== undefined)
       data.lastContactedAt = lastContactedAt ? new Date(lastContactedAt) : null;

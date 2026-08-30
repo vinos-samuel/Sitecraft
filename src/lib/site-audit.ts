@@ -19,6 +19,7 @@ export interface SiteFacts {
   emails: { address: string; source: 'MAILTO' | 'PAGE_TEXT'; mxVerified: boolean }[];
   phones: string[];
   socials: string[];
+  whatsapp: string | null; // https://wa.me/<digits> — India-first contact path, never invented
   copyrightYear: number | null;
   https: boolean;
 }
@@ -162,6 +163,25 @@ function isJunkEmail(addr: string): boolean {
   return EMAIL_JUNK.some((j) => lower.includes(j));
 }
 
+/** Normalize wa.me / api.whatsapp.com / whatsapp.com/send links. Never invent a number. */
+function extractWhatsApp(href: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(href, 'https://example.invalid');
+  } catch {
+    return null;
+  }
+  const host = url.hostname.replace(/^www\./, '').toLowerCase();
+  let digits = '';
+  if (host === 'wa.me' || host.endsWith('.wa.me')) {
+    digits = url.pathname.replace(/^\//, '').split(/[/?#]/)[0].replace(/\D/g, '');
+  } else if (host.includes('whatsapp.com')) {
+    digits = (url.searchParams.get('phone') ?? '').replace(/\D/g, '');
+  }
+  if (digits.length < 8 || digits.length > 15) return null;
+  return `https://wa.me/${digits}`;
+}
+
 async function verifyMx(domain: string): Promise<boolean> {
   try {
     const records = await Promise.race([
@@ -208,6 +228,7 @@ export async function crawlSite(url: string): Promise<SiteFacts> {
       emails: [],
       phones: [],
       socials: [],
+      whatsapp: null,
       copyrightYear: null,
       https,
     };
@@ -241,6 +262,7 @@ export async function crawlSite(url: string): Promise<SiteFacts> {
   const telSet = new Set<string>();
   const mailtoSet = new Set<string>();
   const socialSet = new Set<string>();
+  const whatsappSet = new Set<string>();
   const textBlobs: string[] = [];
 
   let bookingDomain: string | null = null;
@@ -267,8 +289,16 @@ export async function crawlSite(url: string): Promise<SiteFacts> {
       if (v && v.includes('@')) mailtoSet.add(v);
     });
     $p('a[href]').each((_, el) => {
-      const href = ($p(el).attr('href') ?? '').toLowerCase();
-      if (SOCIAL_DOMAINS.some((d) => href.includes(d))) socialSet.add(href);
+      const href = $p(el).attr('href') ?? '';
+      const lower = href.toLowerCase();
+      if (SOCIAL_DOMAINS.some((d) => lower.includes(d))) socialSet.add(lower);
+      const wa = extractWhatsApp(href);
+      if (wa) whatsappSet.add(wa);
+    });
+    const waInHtml = fetched.html.match(/https?:\/\/wa\.me\/\+?\d{8,15}/gi) ?? [];
+    waInHtml.forEach((raw) => {
+      const wa = extractWhatsApp(raw);
+      if (wa) whatsappSet.add(wa);
     });
 
     if (!blogSignal && BLOG_WORD.test(fetched.html)) blogSignal = true;
@@ -324,6 +354,7 @@ export async function crawlSite(url: string): Promise<SiteFacts> {
   // ── Capabilities ────────────────────────────────────────────────────────
   const homeOk = true; // we returned early above if home failed
   const phones = Array.from(telSet).slice(0, 3);
+  const whatsapp = Array.from(whatsappSet)[0] ?? null;
 
   const capabilities: SiteFacts['capabilities'] = {
     onlineBooking: resolveCapability({
@@ -332,10 +363,12 @@ export async function crawlSite(url: string): Promise<SiteFacts> {
       homeOk, category: 'booking', attempted, succeeded,
     }),
     contactInfo: resolveCapability({
-      present: emails.length > 0 || phones.length > 0,
+      present: emails.length > 0 || phones.length > 0 || !!whatsapp,
       presentEvidence: emails.length > 0 && phones.length > 0
         ? 'phone number and email address found'
-        : emails.length > 0 ? 'email address found' : 'phone number found',
+        : emails.length > 0 ? 'email address found'
+        : phones.length > 0 ? 'phone number found'
+        : 'WhatsApp click-to-chat found',
       homeOk, category: 'contact', attempted, succeeded,
     }),
     blog: resolveCapability({
@@ -363,6 +396,7 @@ export async function crawlSite(url: string): Promise<SiteFacts> {
     emails,
     phones,
     socials: Array.from(socialSet).slice(0, 5),
+    whatsapp,
     copyrightYear,
     https,
   };
@@ -406,8 +440,9 @@ export function describeSiteFacts(siteFacts: SiteFacts | null): string {
   return [
     `Their real website was crawled (${siteFacts.pagesFetched.length} page(s) checked, ${siteFacts.pagesFailed.length} could not be loaded). Verified facts below — only describe something as missing if it says "confirmed absent"; if it says "not checked", say nothing about it either way:`,
     ...capLines,
+    siteFacts.whatsapp ? `- WhatsApp click-to-chat (confirmed present): ${siteFacts.whatsapp}` : '',
     '',
     'Page content found:',
     ...pageLines,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }

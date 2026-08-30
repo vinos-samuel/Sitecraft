@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import Pipeline from '@/components/Pipeline';
 import { IconClock, IconCheck, IconMail, IconExternal, IconRefresh } from '@/components/Icons';
+import { isUntestedLead, leadScoreLabel, parseSiteFacts } from '@/lib/lead-display';
 
 const DynamicLiveMap = dynamic(() => import('@/components/LiveMap'), {
   ssr: false,
@@ -396,19 +397,15 @@ export default function Home() {
       });
     }
 
-    if (selectedLead.liveWebsiteUrl) {
-      body += `\n\nTo show you what I mean, I actually took the liberty of building a live, dynamic prototype of how your digital presence should actively look and function. You can view the private demo I deployed for ${selectedLead.name} right here:\n${selectedLead.liveWebsiteUrl}\n\nLet me know your thoughts!`;
+    if (selectedLead.liveWebsiteUrl && !body.includes(selectedLead.liveWebsiteUrl)) {
+      body += `\n\nHere's a private demo I put together for ${selectedLead.name}:\n${selectedLead.liveWebsiteUrl}`;
     }
 
+    // Text + optional demo link only. Never embed the landing-page HTML —
+    // Gmail clips it, styling breaks, and it reads as spam.
     const html = `
-      <div style="font-family: sans-serif; line-height: 1.5; color: #111;">
+      <div style="font-family: Georgia, serif; font-size: 15px; line-height: 1.6; color: #201E1D;">
         ${body.replace(/\n/g, '<br/>')}
-      </div>
-      <hr style="margin-top:20px;"/>
-      <div style="background:#f1f5f9; padding:15px; border-radius:8px;">
-        <p><strong>Private Preview created for ${selectedLead.name}:</strong></p>
-        <p>We've generated a potential improved landing page focusing on your customer pain points.</p>
-        ${selectedLead.landingPageHtml}
       </div>
     `;
 
@@ -589,7 +586,9 @@ export default function Home() {
                 </div>
               ) : (
                 pendingLeads.map((lead: any) => {
-                  const reasonText = parseJsonArray(lead.painPoints)[0] || parseJsonArray(lead.websiteIssues)[0] || 'No issues found — reviews are strong and the site checks out';
+                  const reasonText = isUntestedLead(lead)
+                    ? 'Could not test how the site looks — open it and judge yourself.'
+                    : parseJsonArray(lead.painPoints)[0] || parseJsonArray(lead.websiteIssues)[0] || 'No issues found — reviews are strong and the site checks out';
                   // Strip query strings for display only (Google Business Profile links
                   // are often decorated with UTM tracking) — the full URL with tracking
                   // intact is still what the link actually opens, via lead.website.
@@ -600,7 +599,7 @@ export default function Home() {
                         <div style={{ fontFamily: 'var(--font-heading)', fontSize: '17px', lineHeight: 1.15 }}>{lead.name}</div>
                         <div style={{ fontSize: '13px', color: 'var(--color-text-muted)', marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reasonText}</div>
                         <div className="mono" style={{ fontSize: '10.5px', color: 'var(--color-text-faint)', marginTop: '5px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                          <span>★ {lead.rating} · {lead.designScore != null ? `DESIGN ${lead.websiteQualityScore}/5` : `SITE ${lead.websiteQualityScore}/5 (perf)`} · {lead.address}</span>
+                          <span>★ {lead.rating} · {leadScoreLabel(lead)} · {lead.address}</span>
                           {websiteLabel && (
                             <a
                               href={lead.website}
@@ -683,7 +682,7 @@ export default function Home() {
                               <div style={{ fontFamily: 'var(--font-heading)', fontSize: '17px', lineHeight: 1.15 }}>{lead.name}</div>
                               <div style={{ fontSize: '13px', color: 'var(--color-text-muted)', marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reasonText}</div>
                               <div className="mono" style={{ fontSize: '10.5px', color: 'var(--color-text-faint)', marginTop: '5px' }}>
-                                ★ {lead.rating} · {lead.designScore != null ? `DESIGN ${lead.websiteQualityScore}/5` : `SITE ${lead.websiteQualityScore}/5 (perf)`}
+                                ★ {lead.rating} · {leadScoreLabel(lead)}
                                 {lead.followUpAt && ` · DUE ${new Date(lead.followUpAt).toLocaleDateString()}`}
                               </div>
                             </div>
@@ -853,14 +852,33 @@ export default function Home() {
                   defaultValue={selectedLead.contactEmail ?? selectedLead.emails?.[0] ?? ''}
                   onBlur={async (e) => {
                     await fetch('/api/leads', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: selectedLead.id, contactEmail: e.target.value }) });
-                    setSelectedLead({ ...selectedLead, contactEmail: e.target.value });
+                    setSelectedLead({ ...selectedLead, contactEmail: e.target.value, emailSource: e.target.value.includes('@') ? 'MANUAL' : selectedLead.emailSource });
                   }}
                 />
+                {!selectedLead.contactEmail && !selectedLead.emails?.[0] && (
+                  parseSiteFacts(selectedLead.siteFacts)?.whatsapp ? (
+                    <p style={{ fontSize: '12px', color: 'var(--color-text-muted)', marginTop: '6px' }}>
+                      No email on their site.{' '}
+                      <a href={parseSiteFacts(selectedLead.siteFacts)!.whatsapp!} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-700)' }}>
+                        WhatsApp is listed — open chat
+                      </a>
+                    </p>
+                  ) : (
+                    <p style={{ fontSize: '12px', color: 'var(--color-text-faint)', marginTop: '6px' }}>
+                      No email found — check their website or call
+                    </p>
+                  )
+                )}
               </div>
 
-              {(selectedLead.mobileScore != null || selectedLead.desktopScore != null || selectedLead.designScore != null) && (
+              {(selectedLead.mobileScore != null || selectedLead.desktopScore != null || selectedLead.designScore != null || isUntestedLead(selectedLead) || selectedLead.websiteIssues) && (
                 <div style={{ marginBottom: '16px' }}>
                   <div className="eyebrow" style={{ marginBottom: '8px' }}>Website Test</div>
+                  {isUntestedLead(selectedLead) && (
+                    <p style={{ fontSize: '12.5px', color: 'var(--accent-2-700)', marginBottom: '8px' }}>
+                      UNTESTED — PageSpeed could not render this site. The number you used to see here was a placeholder, not a quality score. Open their real site and judge it yourself.
+                    </p>
+                  )}
                   <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
                     <ScoreMini label="DESIGN" value={selectedLead.designScore} max={5} />
                     <ScoreMini label="MOBILE" value={selectedLead.mobileScore} />

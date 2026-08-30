@@ -480,13 +480,23 @@ export async function assessWebsiteQuality(
   // have a confident read on it (this is the actual pitch: "your site looks
   // dated"), falling back to the performance bucket only when the vision
   // call couldn't judge the screenshot at all.
-  lead.websiteQualityScore = design.confident && design.designScore != null
-    ? design.designScore
-    : bucketTriageScore(mobilePct, desktopPct);
+  if (design.confident && design.designScore != null) {
+    lead.websiteQualityScore = design.designScore;
+  } else if (mobilePct == null && desktopPct == null) {
+    // 0 = UNTESTED. The old fallback stored 2, which the UI rendered as
+    // "SITE 2/5 (perf)" — a real-looking judgment when we never saw the site.
+    lead.websiteQualityScore = 0;
+  } else {
+    lead.websiteQualityScore = bucketTriageScore(mobilePct, desktopPct);
+  }
   lead.websiteIssues = issues.length > 0 ? issues.slice(0, 5) : ["No major issues detected — the site passed Google's core checks."];
 
-  const scoreSource = design.confident ? 'design' : 'performance fallback';
-  onProgress(`[PageSpeed] ${lead.name}: Mobile ${mobilePct ?? 'failed'}, Desktop ${desktopPct ?? 'failed'} → Score ${lead.websiteQualityScore}/5 (${scoreSource})`);
+  const scoreSource = design.confident ? 'design' : (mobilePct == null && desktopPct == null) ? 'untested' : 'performance fallback';
+  onProgress(
+    scoreSource === 'untested'
+      ? `[PageSpeed] ${lead.name}: could not test mobile or desktop — marked UNTESTED, not a quality score.`
+      : `[PageSpeed] ${lead.name}: Mobile ${mobilePct ?? 'failed'}, Desktop ${desktopPct ?? 'failed'} → Score ${lead.websiteQualityScore}/5 (${scoreSource})`
+  );
 
   return lead;
 }

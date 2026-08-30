@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { leadScoreLabel } from '@/lib/lead-display';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -10,6 +11,10 @@ interface Lead {
   phone: string;
   rating: string;
   websiteQualityScore: number;
+  designScore?: number | null;
+  mobileScore?: number | null;
+  desktopScore?: number | null;
+  websiteIssues?: string | string[] | null;
   status: string;
   contactEmail?: string;
   notes?: string;
@@ -154,7 +159,7 @@ function LeadCard({
 
       <div className="mono" style={{ fontSize: '10px', color: 'var(--color-text-muted)', marginTop: '5px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
         {lead.rating && lead.rating !== 'N/A' && <span>★{lead.rating}</span>}
-        <span>SITE {score}/5</span>
+        <span>{leadScoreLabel(lead)}</span>
         {daysSinceContact !== null && <span>{daysSinceContact}d ago</span>}
       </div>
 

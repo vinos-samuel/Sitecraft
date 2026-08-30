@@ -22,6 +22,24 @@ export async function POST(request: Request) {
       );
     }
 
+    if (leadId) {
+      const lead = await prisma.lead.findUnique({
+        where: { id: leadId },
+        select: { emailSource: true },
+      });
+      if (lead && lead.emailSource !== 'SCRAPED_MX_VERIFIED' && lead.emailSource !== 'MANUAL') {
+        return NextResponse.json(
+          {
+            success: false,
+            error: lead.emailSource === 'SCRAPED_NO_MX'
+              ? 'This address was found automatically but its mail domain could not be verified. Confirm the address on their website, re-type it in the Prospect Email field, and send again.'
+              : 'Add the prospect\'s email in the Prospect Email field first (type it in — that marks it as confirmed by you).',
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     // Hard cap on sends/24h — nothing stops a burst of sends from burning a
     // sending domain's reputation otherwise. Override with MAX_DAILY_SENDS.
     const dailyCap = Number(process.env.MAX_DAILY_SENDS) || DEFAULT_DAILY_CAP;
