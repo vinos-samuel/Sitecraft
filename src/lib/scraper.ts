@@ -683,7 +683,7 @@ async function generateDentalOutreach(
   lead: ScrapedLead,
   offer: string,
   onProgress: (msg: string, leadUpdate?: any) => void,
-  opts?: { businessType?: string; city?: string }
+  opts?: { businessType?: string | null; city?: string }
 ): Promise<ScrapedLead> {
   const fill = fillFromLead(lead, {
     mode: 'prospect',
@@ -734,7 +734,7 @@ export async function generateOutreachAssets(
   lead: ScrapedLead,
   offer: string,
   onProgress: (msg: string, leadUpdate?: any) => void,
-  opts?: { businessType?: string; city?: string }
+  opts?: { businessType?: string | null; city?: string }
 ): Promise<ScrapedLead> {
   onProgress(`[AI Agent] Building a real demo for ${lead.name}...`);
 
@@ -742,7 +742,7 @@ export async function generateOutreachAssets(
   // Stored scan category wins over name/heading heuristics (unnamed clinics).
   // GPT HTML is fallback only if the shell cannot run. Other categories
   // still use the freeform GPT page below.
-  const category = opts?.businessType ?? lead.businessType;
+  const category = (opts?.businessType ?? lead.businessType)?.trim() || undefined;
   if (isDentalLead({ ...lead, offer, businessType: category }, category)) {
     try {
       return await generateDentalOutreach(lead, offer, onProgress, { ...opts, businessType: category });

@@ -120,7 +120,7 @@ export interface FillFromLeadOptions {
   locationPreset?: LocationPreset;
   mode?: ShellMode;
   cityHint?: string;
-  businessType?: string;
+  businessType?: string | null;
   claims?: Partial<DentalClaims>;
   modules?: Partial<DentalModules>;
   ctaPolicy?: CtaPolicy;
