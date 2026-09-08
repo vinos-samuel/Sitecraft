@@ -38,6 +38,7 @@ export interface ScrapedLead {
   lng: number;
   outreachEmail?: string;
   landingPageHtml?: string;
+  businessType?: string | null;   // scan-form / Places category, persisted on Lead
 }
 
 // Directory / social URLs that Google often returns as "the website."
@@ -738,11 +739,13 @@ export async function generateOutreachAssets(
   onProgress(`[AI Agent] Building a real demo for ${lead.name}...`);
 
   // Dentists: locked Broadsheet shell from FILL (SiteFacts + lead fields).
+  // Stored scan category wins over name/heading heuristics (unnamed clinics).
   // GPT HTML is fallback only if the shell cannot run. Other categories
   // still use the freeform GPT page below.
-  if (isDentalLead({ ...lead, offer }, opts?.businessType)) {
+  const category = opts?.businessType ?? lead.businessType;
+  if (isDentalLead({ ...lead, offer, businessType: category }, category)) {
     try {
-      return await generateDentalOutreach(lead, offer, onProgress, opts);
+      return await generateDentalOutreach(lead, offer, onProgress, { ...opts, businessType: category });
     } catch (err: any) {
       onProgress(`[Shell] Dental Broadsheet could not run (${err?.message || 'unknown error'}). Falling back to the GPT page.`);
     }

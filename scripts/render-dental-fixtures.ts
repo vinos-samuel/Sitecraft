@@ -166,6 +166,13 @@ check('isDentalLead matches Dentists category and dental names, not salons', () 
   assert.equal(isDentalLead({ name: 'Acme Cuts' }, 'Hair Salons'), false);
 });
 
+check('isDentalLead prefers stored businessType over name/heading heuristics', () => {
+  assert.equal(isDentalLead({ name: 'Acme Family Care' }, 'Dentists'), true);
+  assert.equal(isDentalLead({ name: 'Acme Family Care', businessType: 'Dentists' }), true);
+  assert.equal(isDentalLead({ name: 'Ridgeway Family Dental' }, 'Hair Salons'), false);
+  assert.equal(isDentalLead({ name: 'Acme Family Care' }), false);
+});
+
 if (failed) {
   console.error(`\n${failed} assertion(s) failed.`);
   process.exit(1);

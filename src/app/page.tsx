@@ -324,7 +324,12 @@ export default function Home() {
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadId: selectedLead.id, offer, businessType, city }),
+        body: JSON.stringify({
+          leadId: selectedLead.id,
+          offer,
+          businessType: selectedLead.businessType || businessType,
+          city,
+        }),
       });
       const data = await res.json();
       if (data.success && data.lead) {
@@ -803,7 +808,12 @@ export default function Home() {
           ) : (
             <div key={selectedLead.id}>
               <div className="eyebrow" style={{ marginBottom: '6px' }}>{selectedLead.status}</div>
-              <div style={{ fontFamily: 'var(--font-heading)', fontSize: '24px', lineHeight: 1.1, marginBottom: '12px' }}>{selectedLead.name}</div>
+              <div style={{ fontFamily: 'var(--font-heading)', fontSize: '24px', lineHeight: 1.1, marginBottom: selectedLead.businessType ? '6px' : '12px' }}>{selectedLead.name}</div>
+              {selectedLead.businessType && (
+                <div className="mono" style={{ fontSize: '10.5px', color: 'var(--color-text-faint)', marginBottom: '12px' }}>
+                  Scan category: {selectedLead.businessType}
+                </div>
+              )}
 
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: selectedLead.status === 'REJECTED' ? '8px' : '10px' }}>
                 {STATUSES.map(s => (

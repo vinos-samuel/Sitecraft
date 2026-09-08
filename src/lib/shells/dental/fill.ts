@@ -16,9 +16,16 @@ const DENTAL_RE = /\b(dentist|dentists|dental|dentistry|odontolog|orthodont|peri
 const SERVICE_PAGE_HINT = /service|menu|price|pricing|treatment/i;
 const NAV_HEADING = /^(home|about|contact|blog|news|privacy|login|book now|menu|hours|gallery|our story|testimonials?|welcome)$/i;
 
-export function isDentalLead(lead: DentalLeadInput, businessType?: string): boolean {
+/**
+ * Stored/passed scan category wins. Name, URL, offer, and site headings are
+ * only used when category is null — otherwise unnamed clinics miss the shell
+ * and a "Hair Salons" lead named "... Dental" would falsely hit it.
+ */
+export function isDentalLead(lead: DentalLeadInput, businessType?: string | null): boolean {
+  const category = (businessType ?? lead.businessType)?.trim();
+  if (category) return DENTAL_RE.test(category);
   const headings = lead.siteFacts?.pagesFetched.flatMap((p) => [p.title, ...p.headings]) ?? [];
-  const blob = [businessType, lead.name, lead.website, lead.offer, ...headings].filter(Boolean).join(' ');
+  const blob = [lead.name, lead.website, lead.offer, ...headings].filter(Boolean).join(' ');
   return DENTAL_RE.test(blob);
 }
 

@@ -28,6 +28,7 @@ model Lead {
   lat                 Float
   lng                 Float
   offer               String?   // the offer used when this lead was scanned
+  businessType        String?   // scan-form / Places category (e.g. "Dentists") — used to pick a generate shell
   outreachEmail       String?
   landingPageHtml     String?
   liveWebsiteUrl      String?

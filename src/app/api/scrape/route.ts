@@ -107,11 +107,22 @@ export async function POST(request: Request) {
             // create fresh duplicates of businesses already in the pipeline, and
             // must never overwrite an existing lead's CRM status/notes.
             const existing = lead.placeId
-              ? await prisma.lead.findUnique({ where: { placeId: lead.placeId }, select: { id: true } })
+              ? await prisma.lead.findUnique({ where: { placeId: lead.placeId }, select: { id: true, businessType: true } })
               : null;
+
+            lead.businessType = businessType || null;
 
             if (existing) {
               lead.id = existing.id;
+              // Re-scan must not overwrite CRM status/notes, but it should
+              // persist (or backfill) the scan category so generate can pick
+              // the dental shell for unnamed clinics after a refresh.
+              if (businessType && existing.businessType !== businessType) {
+                await prisma.lead.update({
+                  where: { id: existing.id },
+                  data: { businessType },
+                });
+              }
               sendEvent(`[Dedupe] ${lead.name} is already in your pipeline — skipped.`);
             } else {
               const rejectReason = autoRejectReason(lead);
@@ -136,6 +147,7 @@ export async function POST(request: Request) {
                   lat: lead.lat,
                   lng: lead.lng,
                   offer: offer || null,
+                  businessType: businessType || null,
                   contactEmail: lead.emails?.[0] || null,
                   ...(rejectReason ? { status: 'REJECTED', rejectionReason: rejectReason } : {}),
                 }
