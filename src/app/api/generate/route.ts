@@ -66,16 +66,21 @@ export async function POST(request: Request) {
       siteFacts,
       lat: lead.lat,
       lng: lead.lng,
+      businessType: lead.businessType,
     };
 
     const effectiveOffer = offer || lead.offer || 'A modern, mobile-friendly website that wins you more customers.';
-    const generated = await generateOutreachAssets(scraped, effectiveOffer, () => {}, { businessType, city });
+    // Persist scan category on the lead so regenerate (and unnamed clinics)
+    // still hit the dental shell after the form is cleared.
+    const effectiveBusinessType = lead.businessType || businessType;
+    const generated = await generateOutreachAssets(scraped, effectiveOffer, () => {}, { businessType: effectiveBusinessType, city });
 
     const updated = await prisma.lead.update({
       where: { id: leadId },
       data: {
         outreachEmail: generated.outreachEmail,
         landingPageHtml: generated.landingPageHtml,
+        ...(!lead.businessType && effectiveBusinessType ? { businessType: effectiveBusinessType } : {}),
       },
     });
 

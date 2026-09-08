@@ -103,6 +103,8 @@ export interface DentalLeadInput {
   website?: string;
   address?: string;
   offer?: string;
+  /** Persisted scan-form / Places category. Preferred over name/heading heuristics. */
+  businessType?: string | null;
   siteFacts?: {
     pagesFetched: { url: string; title: string; headings: string[]; text: string }[];
     socials?: string[];
@@ -118,7 +120,7 @@ export interface FillFromLeadOptions {
   locationPreset?: LocationPreset;
   mode?: ShellMode;
   cityHint?: string;
-  businessType?: string;
+  businessType?: string | null;
   claims?: Partial<DentalClaims>;
   modules?: Partial<DentalModules>;
   ctaPolicy?: CtaPolicy;

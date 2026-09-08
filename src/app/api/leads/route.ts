@@ -33,6 +33,7 @@ export async function PUT(request: Request) {
       depositPaidAt,
       outreachEmail,
       rejectionReason,
+      businessType,
     } = body;
 
     if (!id) {
@@ -57,6 +58,7 @@ export async function PUT(request: Request) {
       data.depositPaidAt = depositPaidAt ? new Date(depositPaidAt) : null;
     if (outreachEmail !== undefined) data.outreachEmail = outreachEmail;
     if (rejectionReason !== undefined) data.rejectionReason = rejectionReason;
+    if (businessType !== undefined) data.businessType = businessType || null;
 
     const lead = await prisma.lead.update({ where: { id }, data });
 
