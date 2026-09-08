@@ -9,7 +9,7 @@ export const maxDuration = 180;
 // POST /api/generate — generate outreach email + landing page for one lead
 export async function POST(request: Request) {
   try {
-    const { leadId, offer } = await request.json();
+    const { leadId, offer, businessType, city } = await request.json();
     if (!leadId) return NextResponse.json({ error: 'Missing leadId' }, { status: 400 });
 
     const lead = await prisma.lead.findUnique({ where: { id: leadId } });
@@ -69,7 +69,7 @@ export async function POST(request: Request) {
     };
 
     const effectiveOffer = offer || lead.offer || 'A modern, mobile-friendly website that wins you more customers.';
-    const generated = await generateOutreachAssets(scraped, effectiveOffer, () => {});
+    const generated = await generateOutreachAssets(scraped, effectiveOffer, () => {}, { businessType, city });
 
     const updated = await prisma.lead.update({
       where: { id: leadId },

@@ -267,9 +267,15 @@ export async function crawlSite(url: string): Promise<SiteFacts> {
       if (v && v.includes('@')) mailtoSet.add(v);
     });
     $p('a[href]').each((_, el) => {
-      const href = ($p(el).attr('href') ?? '').toLowerCase();
-      if (SOCIAL_DOMAINS.some((d) => href.includes(d))) socialSet.add(href);
+      const href = ($p(el).attr('href') ?? '').trim();
+      const lower = href.toLowerCase();
+      if (SOCIAL_DOMAINS.some((d) => lower.includes(d))) socialSet.add(href);
+      if (lower.includes('wa.me') || lower.includes('whatsapp.com/send') || lower.includes('api.whatsapp.com')) {
+        socialSet.add(href);
+      }
     });
+    const waInHtml = fetched.html.match(/https?:\/\/(?:wa\.me|api\.whatsapp\.com\/send|whatsapp\.com\/send)[^\s"'<>]*/i);
+    if (waInHtml) socialSet.add(waInHtml[0]);
 
     if (!blogSignal && BLOG_WORD.test(fetched.html)) blogSignal = true;
 

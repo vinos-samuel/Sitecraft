@@ -7,7 +7,8 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "verify:dental-shell": "npx --yes tsx scripts/render-dental-fixtures.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
