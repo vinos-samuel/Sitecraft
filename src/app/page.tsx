@@ -324,7 +324,7 @@ export default function Home() {
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadId: selectedLead.id, offer }),
+        body: JSON.stringify({ leadId: selectedLead.id, offer, businessType, city }),
       });
       const data = await res.json();
       if (data.success && data.lead) {

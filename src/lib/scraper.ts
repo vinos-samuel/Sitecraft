@@ -1,6 +1,12 @@
 import OpenAI from 'openai';
 import * as cheerio from 'cheerio';
 import { SiteFacts, describeSiteFacts } from './site-audit';
+import {
+  buildDentalOutreachEmail,
+  fillFromLead,
+  isDentalLead,
+  renderDentalShell,
+} from './shells/dental';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || 'fake_key_to_allow_build',
@@ -670,14 +676,77 @@ ${html.slice(0, 24000)}`,
   return Array.isArray(res.violations) ? res.violations : [];
 }
 
+// ─── Dental Broadsheet shell (Dentists category) ─────────────────────────────
+
+async function generateDentalOutreach(
+  lead: ScrapedLead,
+  offer: string,
+  onProgress: (msg: string, leadUpdate?: any) => void,
+  opts?: { businessType?: string; city?: string }
+): Promise<ScrapedLead> {
+  const fill = fillFromLead(lead, {
+    mode: 'prospect',
+    variant: 'quiet',
+    cityHint: opts?.city,
+    businessType: opts?.businessType,
+  });
+  const html = renderDentalShell(fill);
+  let email = buildDentalOutreachEmail(fill, offer, process.env.CALENDAR_LINK);
+
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{
+          role: 'user',
+          content: `Write a 3-paragraph cold email for a dental clinic. Facts only — do not invent services, fees, team, or insurance.
+
+Name: ${fill.name}
+City: ${fill.city || 'unknown'}
+Phone: ${fill.phone || 'none'}
+Address: ${fill.address || 'none'}
+Rating: ${fill.rating_line || 'none'}
+Services (use only these): ${fill.services.length ? fill.services.map((s) => typeof s === 'string' ? s : s.name).join(' · ') : 'none extracted — do not invent named treatments'}
+Offer: ${offer || 'none'}
+${process.env.CALENDAR_LINK ? `Booking link: ${process.env.CALENDAR_LINK}` : 'End with "reply to this email."'}
+
+Start with "Subject: " on line 1. No HTML. Respectful; no insults.`,
+        }],
+        max_tokens: 500,
+      });
+      const drafted = completion.choices[0]?.message?.content?.trim();
+      if (drafted) email = drafted;
+    } catch {
+      // Keep the FILL-based template. The page does not depend on GPT.
+    }
+  }
+
+  lead.outreachEmail = email;
+  lead.landingPageHtml = html;
+  onProgress(`[Shell] Broadsheet dental demo ready for ${lead.name} (${fill.options.locationPreset}, ${fill.options.variant}).`);
+  return lead;
+}
+
 // ─── Outreach Generation ──────────────────────────────────────────────────────
 
 export async function generateOutreachAssets(
   lead: ScrapedLead,
   offer: string,
-  onProgress: (msg: string, leadUpdate?: any) => void
+  onProgress: (msg: string, leadUpdate?: any) => void,
+  opts?: { businessType?: string; city?: string }
 ): Promise<ScrapedLead> {
   onProgress(`[AI Agent] Building a real demo for ${lead.name}...`);
+
+  // Dentists: locked Broadsheet shell from FILL (SiteFacts + lead fields).
+  // GPT HTML is fallback only if the shell cannot run. Other categories
+  // still use the freeform GPT page below.
+  if (isDentalLead({ ...lead, offer }, opts?.businessType)) {
+    try {
+      return await generateDentalOutreach(lead, offer, onProgress, opts);
+    } catch (err: any) {
+      onProgress(`[Shell] Dental Broadsheet could not run (${err?.message || 'unknown error'}). Falling back to the GPT page.`);
+    }
+  }
 
   if (!process.env.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY is not set. Add it to the environment and try Generate again — the app will not invent a fake demo.');
