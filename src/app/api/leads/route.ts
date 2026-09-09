@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import { ensureLeadSchema, prisma } from '@/lib/prisma';
 
 // Always hit the DB fresh — this route must never serve a stale/cached result.
 export const dynamic = 'force-dynamic';
@@ -7,6 +7,7 @@ export const dynamic = 'force-dynamic';
 // GET /api/leads — return all leads, newest first
 export async function GET() {
   try {
+    await ensureLeadSchema();
     const leads = await prisma.lead.findMany({ orderBy: { createdAt: 'desc' } });
     return NextResponse.json(leads);
   } catch (err: any) {
@@ -39,6 +40,8 @@ export async function PUT(request: Request) {
     if (!id) {
       return NextResponse.json({ error: 'id is required' }, { status: 400 });
     }
+
+    await ensureLeadSchema();
 
     const data: Record<string, any> = {};
     if (status !== undefined) data.status = status;
