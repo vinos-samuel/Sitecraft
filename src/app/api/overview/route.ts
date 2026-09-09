@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import { ensureLeadSchema, prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 
@@ -7,6 +7,7 @@ export const dynamic = 'force-dynamic';
 // through every lead: pipeline counts, reply/close rate, revenue, recent activity.
 export async function GET() {
   try {
+    await ensureLeadSchema();
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
     const [totalLeads, byStatusRaw, closedLeads, recentActivity, scansThisWeek, emailsSentThisWeek, emailsSentTotal, demosDeployedTotal] = await Promise.all([

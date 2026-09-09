@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import { ensureLeadSchema, prisma } from '@/lib/prisma';
 
 // Always hit the DB fresh — this route must never serve a stale/cached result.
 export const dynamic = 'force-dynamic';
@@ -16,6 +16,7 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET() {
   try {
+    await ensureLeadSchema();
     const now = new Date();
     const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);

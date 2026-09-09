@@ -1,6 +1,6 @@
 import { liveScrapeGoogleMaps, analyzeWebsiteAndReviews, assessWebsiteQuality, ScrapedLead, isRealBusinessWebsite } from '@/lib/scraper';
 import { crawlSite } from '@/lib/site-audit';
-import { prisma } from '@/lib/prisma';
+import { ensureLeadSchema, prisma } from '@/lib/prisma';
 
 // Scanning 10 leads + AI analysis takes a while; allow up to 5 minutes on Vercel.
 export const maxDuration = 300;
@@ -68,6 +68,7 @@ export async function POST(request: Request) {
 
       try {
         sendEvent("Initializing scraping engine...");
+        await ensureLeadSchema();
 
         // 1. Scrape Google Maps
         const leads = await liveScrapeGoogleMaps(businessType, city, sendEvent);

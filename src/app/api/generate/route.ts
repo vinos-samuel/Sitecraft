@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import { ensureLeadSchema, prisma } from '@/lib/prisma';
 import { generateOutreachAssets, ScrapedLead } from '@/lib/scraper';
 import { SiteFacts } from '@/lib/site-audit';
 
@@ -12,6 +12,7 @@ export async function POST(request: Request) {
     const { leadId, offer, businessType, city } = await request.json();
     if (!leadId) return NextResponse.json({ error: 'Missing leadId' }, { status: 400 });
 
+    await ensureLeadSchema();
     const lead = await prisma.lead.findUnique({ where: { id: leadId } });
     if (!lead) return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
 

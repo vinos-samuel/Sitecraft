@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import { ensureLeadSchema, prisma } from '@/lib/prisma';
 
 export const maxDuration = 60;
 
@@ -9,6 +9,7 @@ export async function POST(request: Request) {
     const { leadId } = await request.json();
     if (!leadId) return NextResponse.json({ error: "Missing leadId" }, { status: 400 });
 
+    await ensureLeadSchema();
     const lead = await prisma.lead.findUnique({ where: { id: leadId } });
     if (!lead || !lead.landingPageHtml) {
       return NextResponse.json({ error: "Lead not found or missing HTML asset" }, { status: 404 });
